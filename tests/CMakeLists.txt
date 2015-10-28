@@ -36,7 +36,6 @@ ENDIF()
 #set(OpenCV_DIR ${ROOT_DIR}/thirdparty/opencv/build CACHE PATH "Path to local OpenCV source tree" FORCE)
 set(OpenCV_STATIC ON)
 FIND_PACKAGE(OpenCV REQUIRED)
-message(${OpenCV_INCLUDE_DIRS})
 include_directories(${OpenCV_INCLUDE_DIRS})
 list(APPEND TEST_CAMERA_REQ_LIBS ${OpenCV_LIBS})
 

@@ -17,10 +17,16 @@ A background service that communicates with the psmove and stores pose and butto
     * I am opting for a system install of opencv instead of project-specific.
     * Windows
         * Follow steps 1-3 found [here](https://github.com/MicrocontrollersAndMore/OpenCV_3_Windows_10_Installation_Tutorial/blob/master/Installation%20Cheat%20Sheet%201%20-%20OpenCV%203%20and%20C%2B%2B.pdf)
+        * Download from here: http://sourceforge.net/projects/opencvlibrary/files/opencv-win/3.0.0/opencv-3.0.0.exe/download
     * Mac
         * Install [homebrew](http://brew.sh/)
         * `brew tap homebrew/science`
         * `brew install opencv`
+1. Boost
+    * Windows
+        * Download 32-bit boost for MSVC-2013 from here: http://sourceforge.net/projects/boost/files/boost-binaries/1.59.0/boost_1_59_0-msvc-12.0-32.exe/download
+        * Install to a directory of your choice
+        * This path will be referred to BOOST_ROOT later
 1. Optional: libusb
     * Only necessary for PS3EYEDriver (required on Mac and Windows 64-bit)
     * Windows:
@@ -48,7 +54,7 @@ A background service that communicates with the psmove and stores pose and butto
 1. `mkdir build`
 1. `cd build`
 1. Run cmake
-    * Windows: `cmake .. -G "Visual Studio 12" -DOpenCV_DIR=C:\OpenCV-3.0.0\build`
+    * Windows: `cmake .. -G "Visual Studio 12" -DOpenCV_DIR=C:\OpenCV-3.0.0\build -DBOOST_ROOT=C:\boost_1_59_0`
     * Mac: `cmake ..`
 
 # Build PSMoveService
