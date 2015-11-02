@@ -27,6 +27,19 @@ A background service that communicates with the psmove and stores pose and butto
         * Download 32-bit boost for MSVC-2013 from here: http://sourceforge.net/projects/boost/files/boost-binaries/1.59.0/boost_1_59_0-msvc-12.0-32.exe/download
         * Install to a directory of your choice
         * This path will be referred to BOOST_ROOT later
+1. protobuf
+    * Windows        
+        * CD to thirdparty\protobuf
+        * mkdir install
+        * cd cmake
+        * mkdir build
+        * cd build
+        * mkdir msvc
+        * cd msvc
+        * cmake -G "Visual Studio 12 2013" -DCMAKE_INSTALL_PREFIX=../../../install -Dprotobuf_BUILD_TESTS=OFF ../..
+        * Open protobuf.sln
+        * Select Release|Win32 and Build > Rebuild Solution
+        * Build the "Install" project
 1. Optional: libusb
     * Only necessary for PS3EYEDriver (required on Mac and Windows 64-bit)
     * Windows:
