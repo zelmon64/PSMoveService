@@ -325,21 +325,20 @@ public:
 
     bool grabFrame()
     {
-        ps3eye::PS3EYECam::updateDevices();
-        return eye->isNewFrame();
+        uint8_t *new_pixels = eye->getFrame();
+        if (new_pixels != NULL)
+        {
+            std::memcpy(m_MatYUV.data, new_pixels, m_MatYUV.total() * m_MatYUV.elemSize() * sizeof(uint8_t));
+        }
+        free(new_pixels);
+        return true;
     }
 
     bool retrieveFrame(int outputType, cv::OutputArray outArray)
     {
-        const unsigned char *new_pixels = eye->getLastFramePointer();
 
-        if (new_pixels != NULL)
-        {
-            std::memcpy(m_MatYUV.data, new_pixels, m_MatYUV.total() * m_MatYUV.elemSize() * sizeof(uchar));
-            cv::cvtColor(m_MatYUV, outArray, CV_YUV2BGR_YUY2);
-            return true;
-        }
-        return false;
+        cv::cvtColor(m_MatYUV, outArray, CV_YUV2BGR_YUY2);
+        return true;
     }
 
     int getCaptureDomain() {
@@ -356,12 +355,13 @@ protected:
     bool open(int _index)
     {
         // Enumerate libusb devices
-        std::vector<ps3eye::PS3EYECam::PS3EYERef> devices = ps3eye::PS3EYECam::getDevices();
-        std::cout << "ps3eye::PS3EYECam::getDevices() found " << devices.size() << " devices." << std::endl;
+        unsigned int dev_count = ps3eye::PS3EYECam::getDeviceCount();
+        //std::vector<ps3eye::PS3EYECam::PS3EYERef> devices = ps3eye::PS3EYECam::getDevices();
+        std::cout << "ps3eye::PS3EYECam::getDeviceCount() found " << dev_count << " devices." << std::endl;
         
-        if (devices.size() > (unsigned int)_index) {
+        if (dev_count > (unsigned int)_index) {
             
-            eye = devices[_index];
+            eye = ps3eye::PS3EYECam::createDevice(_index);
             
             if (eye && eye->init(640, 480, 60))
             {
