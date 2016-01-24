@@ -1,5 +1,6 @@
 #include "PSEyeVideoCapture.h"
 #include "opencv2/opencv.hpp"
+#include <time.h>
 #include <algorithm>
 
 const std::vector<int> known_keys = {113, 97, 119, 115, 101, 100, 114, 102, 116, 103};
@@ -11,16 +12,43 @@ int main(int, char**)
     if(!cap.isOpened())  // check if we succeeded
         return -1;
     
+    double fps = cap.get(CV_CAP_PROP_FPS);
+    std::cout << "Frames per second using video.get(CV_CAP_PROP_FPS) : " << fps << std::endl;
+    
+    // Number of frames to capture
+    int num_frames = 120;
+    int cap_frames = 0;
+    
+    // Start and end times
+    time_t start, end;
+    
     cv::namedWindow("result",1);
+    
+    // Start time
+    time(&start);
+    
     for(;;)
     {
         cv::Mat frame;
         cap >> frame; // get a new frame from camera
+        
+        cap_frames++;
+        if (cap_frames == num_frames)
+        {
+            time(&end);
+            double seconds = difftime (end, start);
+            fps  = num_frames / seconds;
+            std::cout << "Estimated frames per second : " << fps << std::endl;
+            
+            cap_frames = 0;
+            time(&start);
+        }
+        
 		int wk = -1;
 		if (!frame.empty())
 		{
-			imshow("result", frame);
-			wk = cv::waitKey(30);
+            imshow("result", frame);
+            wk = cv::waitKey(1);
 		}
         
         if (wk == 27)  // Escape
