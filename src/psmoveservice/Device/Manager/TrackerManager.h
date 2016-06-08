@@ -57,7 +57,7 @@ public:
 
     bool startup() override;
 
-    static const int k_max_devices = 2;
+    static const int k_max_devices = 3;
     int getMaxDevices() const override
     {
         return TrackerManager::k_max_devices;
