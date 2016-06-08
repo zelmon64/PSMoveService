@@ -151,10 +151,15 @@ bool ServerControllerView::open(const class DeviceEnumerator *enumerator)
             {
                 const PSMoveController *psmoveController= this->castCheckedConst<PSMoveController>();
 
-                init_filters_for_psmove(psmoveController, m_orientation_filter, m_position_filter);
-                m_multicam_position_estimation->clear();
+                // Don't bother initializing any filters or allocating a tracking color
+                // for usb connected controllers
+                if (psmoveController->getIsBluetooth())
+                {
+                    init_filters_for_psmove(psmoveController, m_orientation_filter, m_position_filter);
+                    m_multicam_position_estimation->clear();
 
-                bAllocateTrackingColor = true;
+                    bAllocateTrackingColor = true;
+                }
             } break;
         case CommonDeviceState::PSNavi:
             // No orientation filter for the navi
@@ -214,22 +219,23 @@ void ServerControllerView::updatePositionEstimation(TrackerManager* tracker_mana
         for (int tracker_id = 0; tracker_id < tracker_manager->getMaxDevices(); ++tracker_id)
         {
             ServerTrackerViewPtr tracker = tracker_manager->getTrackerViewPtr(tracker_id);
-            ControllerPositionEstimation &positionEstimate= m_tracker_position_estimation[tracker_id];
+            ControllerPositionEstimation &positionEstimate = m_tracker_position_estimation[tracker_id];
 
-            if (tracker->computePositionForController(
-                    this, 
-                    &positionEstimate.position, 
+            positionEstimate.bCurrentlyTracking = false;
+
+            if (tracker->getIsOpen())
+            {
+                if (tracker->computePositionForController(
+                    this,
+                    &positionEstimate.position,
                     &positionEstimate.projection))
-            {
-                positionEstimate.bCurrentlyTracking= true;
-                positionEstimate.last_visible_timestamp = now;
+                {
+                    positionEstimate.bCurrentlyTracking = true;
+                    positionEstimate.last_visible_timestamp = now;
 
-                valid_tracker_ids[positions_found] = tracker_id;
-                ++positions_found;
-            }
-            else
-            {
-                positionEstimate.bCurrentlyTracking= false;
+                    valid_tracker_ids[positions_found] = tracker_id;
+                    ++positions_found;
+                }
             }
 
             // Keep track of the last time the position estimate was updated
@@ -470,27 +476,27 @@ ServerControllerView::getFilteredPhysics() const
 bool 
 ServerControllerView::getIsBluetooth() const
 {
-    return m_device->getIsBluetooth();
+    return (m_device != nullptr) ? m_device->getIsBluetooth() : false;
 }
 
 // Returns the full usb device path for the controller
 std::string 
 ServerControllerView::getUSBDevicePath() const
 {
-    return m_device->getUSBDevicePath();
+    return (m_device != nullptr) ? m_device->getUSBDevicePath() : "";
 }
 
 // Returns the serial number for the controller
 std::string 
 ServerControllerView::getSerial() const
 {
-    return m_device->getSerial();
+    return(m_device != nullptr) ? m_device->getSerial() : "";
 }
 
 std::string 
-ServerControllerView::getHostBluetoothAddress() const
+ServerControllerView::getAssignedHostBluetoothAddress() const
 {
-    return m_device->getHostBluetoothAddress();
+    return (m_device != nullptr) ? m_device->getAssignedHostBluetoothAddress() : "";
 }
 
 CommonDeviceState::eDeviceType
