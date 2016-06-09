@@ -1100,7 +1100,7 @@ void CPSMoveControllerLatest::UpdateControllerState()
     SendButtonUpdates( &vr::IServerDriverHost::TrackedDeviceButtonUnpressed, ulChangedPressed & ~NewState.ulButtonPressed );
     SendButtonUpdates( &vr::IServerDriverHost::TrackedDeviceButtonUntouched, ulChangedTouched & ~NewState.ulButtonTouched );
 
-    NewState.rAxis[0].x = clientView.GetTriggerValue();
+	NewState.rAxis[0].x = clientView.GetTriggerValue();	// 255.0;
     NewState.rAxis[0].y = 0.f;
 
     if ( NewState.rAxis[0].x != m_ControllerState.rAxis[0].x )
