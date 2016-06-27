@@ -1,6 +1,7 @@
 // -- includes -----
 #include "ControllerDeviceEnumerator.h"
 #include "ServerUtility.h"
+#include "USBDeviceInfo.h"
 #include "assert.h"
 #include "hidapi.h"
 #include "string.h"

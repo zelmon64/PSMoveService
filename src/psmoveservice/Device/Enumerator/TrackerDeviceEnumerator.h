@@ -1,8 +1,11 @@
 #ifndef TRACKER_DEVICE_ENUMERATOR_H
 #define TRACKER_DEVICE_ENUMERATOR_H
 
+//-- includes -----
 #include "DeviceEnumerator.h"
+#include "USBDeviceInfo.h" // for MAX_USB_DEVICE_PORT_PATH
 
+//-- definitions -----
 class TrackerDeviceEnumerator : public DeviceEnumerator
 {
 public:
