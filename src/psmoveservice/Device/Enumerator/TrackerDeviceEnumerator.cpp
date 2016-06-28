@@ -23,34 +23,29 @@ USBDeviceInfo k_supported_tracker_infos[MAX_CAMERA_TYPE_INDEX] = {
     //{ 0x045e, 0x02ae }, // V1 Kinect - TODO
 };
 
+// -- private prototypes -----
+static bool get_usb_tracker_type(t_usb_device_handle usb_device_handle, CommonDeviceState::eDeviceType &out_device_type);
+
 // -- methods -----
 TrackerDeviceEnumerator::TrackerDeviceEnumerator()
-    : DeviceEnumerator(CommonDeviceState::PS3EYE)
-    , dev_index(0)
-    , dev_count(0)
-    , camera_index(-1)
+    : m_USBDeviceHandle(k_invalid_usb_device_handle)
+    , m_cameraIndex(0)
 {
+    USBAsyncRequestManager *usbRequestMgr = USBAsyncRequestManager::getInstance();
+
     assert(m_deviceType >= 0 && GET_DEVICE_TYPE_INDEX(m_deviceType) < MAX_CAMERA_TYPE_INDEX);
+    m_USBDeviceHandle = usbRequestMgr->getFirstUSBDeviceHandle();
 
-    dev_count= USBAsyncRequestManager::getInstance()->getFilteredDeviceCount();    
-    dev_index= -1;
-    camera_index = -1;
-    next();
-}
-
-TrackerDeviceEnumerator::TrackerDeviceEnumerator(CommonDeviceState::eDeviceType deviceType)
-    : DeviceEnumerator(deviceType)
-    , dev_index(0)
-    , dev_count(0)
-    , camera_index(-1)
-    , dev_valid(false)
-{
-    assert(m_deviceType >= 0 && GET_DEVICE_TYPE_INDEX(m_deviceType) < MAX_CAMERA_TYPE_INDEX);
-
-    dev_count = USBAsyncRequestManager::getInstance()->getFilteredDeviceCount();
-    dev_index = -1;
-    camera_index = -1;
-    next();
+    // If the first USB device handle isn't a tracker, move on to the next device
+    if (get_usb_tracker_type(m_USBDeviceHandle, m_deviceType))
+    {
+        // Cache the current usb path
+        usbRequestMgr->getUSBDevicePath(m_USBDeviceHandle, m_currentUSBPath, sizeof(m_currentUSBPath));
+    }
+    else
+    {
+        next();
+    }
 }
 
 const char *TrackerDeviceEnumerator::get_path() const
@@ -60,7 +55,7 @@ const char *TrackerDeviceEnumerator::get_path() const
     if (is_valid())
     {
         // Return a pointer to our member variable that has the path cached
-        result= cur_path;
+        result= m_currentUSBPath;
     }
 
     return result;
@@ -68,43 +63,57 @@ const char *TrackerDeviceEnumerator::get_path() const
 
 bool TrackerDeviceEnumerator::is_valid() const
 {
-    return dev_index < dev_count;
+    return m_USBDeviceHandle != k_invalid_usb_device_handle;
 }
 
 bool TrackerDeviceEnumerator::next()
 {
+    USBAsyncRequestManager *usbRequestMgr= USBAsyncRequestManager::getInstance();
     bool foundValid = false;
 
-    while (dev_index < dev_count && !foundValid)
+    while (is_valid() && !foundValid)
     {
-        USBDeviceInfo devInfo;
+        m_USBDeviceHandle = usbRequestMgr->getNextUSBDeviceHandle(m_USBDeviceHandle);
 
-        ++dev_index;
-        if (USBAsyncRequestManager::getInstance()->getFilteredDeviceInfo(dev_index, devInfo))
+        if (is_valid() && get_usb_tracker_type(m_USBDeviceHandle, m_deviceType))
         {
-            // See if the next filtered device is a camera that we care about
-            for (int tracker_type_index = 0; tracker_type_index < MAX_CAMERA_TYPE_INDEX; ++tracker_type_index)
-            {
-                const USBDeviceInfo &supported_type= k_supported_tracker_infos[tracker_type_index];
-
-                if (devInfo.product_id == supported_type.product_id &&
-                    devInfo.vendor_id == supported_type.vendor_id)
-                {
-                    // Cache the path to the device
-                    USBAsyncRequestManager::getInstance()->getFilteredDevicePath(dev_index, cur_path, sizeof(cur_path));
-
-                    m_deviceType = static_cast<CommonDeviceState::eDeviceType>(CommonDeviceState::TrackingCamera + tracker_type_index);
-                    foundValid= true;
-                    break;
-                }
-            }
+            // Cache the path to the device
+            usbRequestMgr->getUSBDevicePath(m_USBDeviceHandle, m_currentUSBPath, sizeof(m_currentUSBPath));
+            foundValid= true;
+            break;
         }
     }
 
     if (foundValid)
     {
-        ++camera_index;
+        ++m_cameraIndex;
     }
 
     return foundValid;
+}
+
+//-- private methods -----
+static bool get_usb_tracker_type(t_usb_device_handle usb_device_handle, CommonDeviceState::eDeviceType &out_device_type)
+{
+    USBDeviceInfo devInfo;
+    bool bIsValidDevice = false;
+
+    if (USBAsyncRequestManager::getInstance()->getUSBDeviceInfo(usb_device_handle, devInfo))
+    {
+        // See if the next filtered device is a camera that we care about
+        for (int tracker_type_index = 0; tracker_type_index < MAX_CAMERA_TYPE_INDEX; ++tracker_type_index)
+        {
+            const USBDeviceInfo &supported_type = k_supported_tracker_infos[tracker_type_index];
+
+            if (devInfo.product_id == supported_type.product_id &&
+                devInfo.vendor_id == supported_type.vendor_id)
+            {
+                out_device_type = static_cast<CommonDeviceState::eDeviceType>(CommonDeviceState::TrackingCamera + tracker_type_index);
+                bIsValidDevice = true;
+                break;
+            }
+        }
+    }
+
+    return bIsValidDevice;
 }

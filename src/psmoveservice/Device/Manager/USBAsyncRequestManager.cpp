@@ -10,6 +10,8 @@
 #include <thread>
 #include <vector>
 
+#include <boost/lockfree/spsc_queue.hpp>
+
 //-- pre-declarations -----
 
 //-- private implementation -----
@@ -73,18 +75,32 @@ public:
         }
     }
 
-    int getFilteredDeviceCount() const
+    // -- Device Queries ----
+    int getUSBDeviceCount() const
     {
         return static_cast<int>(m_filtered_device_list.size());
     }
 
-    bool getFilteredDeviceInfo(int filteredDeviceIndex, USBDeviceInfo &outDeviceInfo) const
+    t_usb_device_handle getFirstUSBDeviceHandle() const
+    {
+        return (m_filtered_device_list.size() > 0) ? static_cast<t_usb_device_handle>(0) : k_invalid_usb_device_handle;
+    }
+
+    t_usb_device_handle getNextUSBDeviceHandle(t_usb_device_handle handle) const
+    {
+        int device_index= static_cast<int>(handle);
+
+        return (device_index + 1 < getUSBDeviceCount()) ? static_cast<t_usb_device_handle>(device_index + 1) : k_invalid_usb_device_handle;
+    }
+
+    bool getUSBDeviceInfo(t_usb_device_handle handle, USBDeviceInfo &outDeviceInfo) const
     {
         bool bSuccess= false;
+        int device_index = static_cast<int>(handle);
 
-        if (filteredDeviceIndex >= 0 && filteredDeviceIndex < getFilteredDeviceCount())
+        if (device_index >= 0 && device_index < getUSBDeviceCount())
         {
-            libusb_device *dev= m_filtered_device_list[filteredDeviceIndex];
+            libusb_device *dev = m_filtered_device_list[device_index];
 
             struct libusb_device_descriptor dev_desc;
             libusb_get_device_descriptor(dev, &dev_desc);
@@ -97,13 +113,14 @@ public:
         return bSuccess;
     }
 
-    bool getFilteredDevicePath(int filteredDeviceIndex, char *outBuffer, size_t bufferSize) const
+    bool getUSBDevicePath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const
     {
         bool bSuccess = false;
+        int device_index = static_cast<int>(handle);
 
-        if (filteredDeviceIndex >= 0 && filteredDeviceIndex < getFilteredDeviceCount())
+        if (device_index >= 0 && device_index < getUSBDeviceCount())
         {
-            libusb_device *dev = m_filtered_device_list[filteredDeviceIndex];
+            libusb_device *dev = m_filtered_device_list[device_index];
 
             struct libusb_device_descriptor dev_desc;
             libusb_get_device_descriptor(dev, &dev_desc);
@@ -113,7 +130,7 @@ public:
                 ServerUtility::format_string(
                     outBuffer, bufferSize,
                     "USB\\VID_%04X&PID_%04X\\%d",
-                    dev_desc.idVendor, dev_desc.idProduct, filteredDeviceIndex);
+                    dev_desc.idVendor, dev_desc.idProduct, device_index);
 
             bSuccess = (nCharsWritten > 0);
         }
@@ -121,6 +138,10 @@ public:
         return bSuccess;
     }
 
+    bool submitTransferRequest(const USBAsyncRequestManager::USBTransferRequest &request)
+    {
+        return request_queue.push(request);
+    }
 
 protected:
     void startWorkerThread()
@@ -143,6 +164,24 @@ protected:
 
         while (!m_exit_signaled)
         {
+            // Process incoming USB transfer requests
+            USBAsyncRequestManager::USBTransferRequest request;
+            while (request_queue.pop(request))
+            {
+                switch (request.request_type)
+                {
+                case USBAsyncRequestManager::_USBRequestType_ControlTransfer:
+                    handleControlTransferRequest(request.payload.control_transfer);
+                    break;
+                case USBAsyncRequestManager::_USBRequestType_StartBulkTransfer:
+                    handleStartBulkTransferRequest(request.payload.start_bulk_transfer);
+                    break;
+                case USBAsyncRequestManager::_USBRequestType_StopBulkTransfer:
+                    handleStopBulkTransferRequest(request.payload.stop_bulk_transfer);
+                    break;
+                }
+            }
+
             if (m_active_bulk_transfers > 0 || m_active_control_transfers > 0)
             {
                 libusb_handle_events_timeout_completed(m_usb_context, &tv, NULL);
@@ -152,6 +191,21 @@ protected:
                 ServerUtility::sleep_ms(100);
             }
         }
+    }
+
+    void handleControlTransferRequest(USBAsyncRequestManager::RequestPayload_ControlTransfer &control_transfer)
+    {
+        //TODO
+    }
+
+    void handleStartBulkTransferRequest(USBAsyncRequestManager::RequestPayload_StartBulkTransfer &start_bulk_transfer)
+    {
+        //TODO
+    }
+
+    void handleStopBulkTransferRequest(USBAsyncRequestManager::RequestPayload_StopBulkTransfer &stop_bulk_transfer)
+    {
+        //TODO
     }
 
     void stopWorkerThread()
@@ -246,6 +300,7 @@ private:
     // Multithreaded state
     libusb_context* m_usb_context;
     std::atomic_bool m_exit_signaled;
+    boost::lockfree::spsc_queue<USBAsyncRequestManager::USBTransferRequest, boost::lockfree::capacity<128> > request_queue;
 
     // Worker thread state
     int m_active_bulk_transfers;
@@ -297,17 +352,32 @@ void USBAsyncRequestManager::shutdown()
     m_instance = NULL;
 }
 
-int USBAsyncRequestManager::getFilteredDeviceCount() const
+int USBAsyncRequestManager::getUSBDeviceCount() const
 {
-    return implementation_ptr->getFilteredDeviceCount();
+    return implementation_ptr->getUSBDeviceCount();
 }
 
-bool USBAsyncRequestManager::getFilteredDeviceInfo(int filteredDeviceIndex, USBDeviceInfo &outDeviceInfo) const
+t_usb_device_handle USBAsyncRequestManager::getFirstUSBDeviceHandle() const
 {
-    return implementation_ptr->getFilteredDeviceInfo(filteredDeviceIndex, outDeviceInfo);
+    return implementation_ptr->getFirstUSBDeviceHandle();
 }
 
-bool USBAsyncRequestManager::getFilteredDevicePath(int filteredDeviceIndex, char *outBuffer, size_t bufferSize) const
+t_usb_device_handle USBAsyncRequestManager::getNextUSBDeviceHandle(t_usb_device_handle handle) const
 {
-    return implementation_ptr->getFilteredDevicePath(filteredDeviceIndex, outBuffer, bufferSize);
+    return implementation_ptr->getNextUSBDeviceHandle(handle);
+}
+
+bool USBAsyncRequestManager::getUSBDeviceInfo(t_usb_device_handle handle, USBDeviceInfo &outDeviceInfo) const
+{
+    return implementation_ptr->getUSBDeviceInfo(handle, outDeviceInfo);
+}
+
+bool USBAsyncRequestManager::getUSBDevicePath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const
+{
+    return implementation_ptr->getUSBDevicePath(handle, outBuffer, bufferSize);
+}
+
+bool USBAsyncRequestManager::submitTransferRequest(const USBTransferRequest &request)
+{
+    return implementation_ptr->submitTransferRequest(request);
 }
