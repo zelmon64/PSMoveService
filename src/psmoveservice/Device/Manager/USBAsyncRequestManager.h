@@ -2,13 +2,14 @@
 #define USB_ASYNC_REQUEST_MANAGER_H
 
 //-- includes -----
+#include "USBDeviceInfo.h"
 
 //-- definitions -----
 /// Manages async control and bulk transfer requests to usb devices via libusb.
 class USBAsyncRequestManager
 {
 public:
-    USBAsyncRequestManager();
+    USBAsyncRequestManager(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length);
     virtual ~USBAsyncRequestManager();
 
     bool startup(); /**< Initialize the libusb thread. */
@@ -20,7 +21,14 @@ public:
         return m_instance;
     }
 
+    int getFilteredDeviceCount() const;
+    bool getFilteredDeviceInfo(int filteredDeviceIndex, USBDeviceInfo &outDeviceInfo) const;
+    bool getFilteredDevicePath(int filteredDeviceIndex, char *outBuffer, size_t bufferSize) const;
+
 private:
+    // Always use the overloaded constructor
+    USBAsyncRequestManager();
+
     /// private implementation
     class USBAsyncRequestManagerImpl *implementation_ptr;
 

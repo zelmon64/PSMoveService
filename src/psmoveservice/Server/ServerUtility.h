@@ -31,6 +31,12 @@ namespace ServerUtility
     bool normalize_bluetooth_address(
         const char *addr, bool bLowercase, char separator, 
         char *result, size_t result_max_size);
+
+    /// Sets the name of the current thread
+    void set_current_thread_name(const char* thread_name);
+
+    /// Sleeps the current thread for the given number of milliseconds
+    void sleep_ms(int milliseconds);
 };
 
 #endif // SERVER_REQUEST_HANDLER_H

@@ -31,6 +31,15 @@ using namespace boost;
 
 const int PSMOVE_SERVER_PORT = 9512;
 
+//-- constants -----
+// List of all possible USB devices that we want to connect to via libusb
+// VendorID, ProductID
+USBDeviceInfo k_usb_device_whitelist[1] = {
+    { 0x1415, 0x2000 }, // PS3Eye
+    //{ 0x05a9, 0x058a }, // PS4 Camera - TODO
+    //{ 0x045e, 0x02ae }, // V1 Kinect - TODO
+};
+
 //-- definitions -----
 class PSMoveServiceImpl
 {
@@ -38,7 +47,7 @@ public:
     PSMoveServiceImpl()
         : m_io_service()
         , m_signals(m_io_service)
-        , m_usb_async_request_manager()
+        , m_usb_async_request_manager(k_usb_device_whitelist, 1)
         , m_device_manager()
         , m_request_handler(&m_device_manager)
         , m_network_manager(&m_io_service, PSMOVE_SERVER_PORT, &m_request_handler)
