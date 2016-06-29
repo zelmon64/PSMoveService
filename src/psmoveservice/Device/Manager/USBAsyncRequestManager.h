@@ -12,14 +12,19 @@ public:
     USBAsyncRequestManager(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length);
     virtual ~USBAsyncRequestManager();
 
-    bool startup(); /**< Initialize the libusb thread. */
-    void update();  /**< Process events from the libusb thread. */
-    void shutdown();/**< Shutdown the libusb thread. */
-
     static inline USBAsyncRequestManager *getInstance()
     {
         return m_instance;
     }
+
+    // -- System ----
+    bool startup(); /**< Initialize the libusb thread. */
+    void update();  /**< Process events from the libusb thread. */
+    void shutdown();/**< Shutdown the libusb thread. */
+
+    // -- Device Actions ----
+    bool openUSBDevice(t_usb_device_handle handle);
+    void closeUSBDevice(t_usb_device_handle handle);
 
     // -- Device Queries ----
     int getUSBDeviceCount() const;
@@ -27,6 +32,7 @@ public:
     t_usb_device_handle getNextUSBDeviceHandle(t_usb_device_handle handle) const;
     bool getUSBDeviceInfo(t_usb_device_handle handle, USBDeviceInfo &outDeviceInfo) const;
     bool getUSBDevicePath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const;
+    bool getIsUSBDeviceOpen(t_usb_device_handle handle) const;
 
     // -- Request Queue ----
     enum eUSBTransferRequestType
@@ -56,6 +62,7 @@ public:
         int in_flight_transfer_packet_count;
         bulk_transfer_cb_fn on_data_callback;
         void *transfer_callback_userdata;
+        bool bAutoResubmit;
     };
 
     struct RequestPayload_StopBulkTransfer
