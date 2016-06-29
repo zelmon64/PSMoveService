@@ -1,7 +1,7 @@
 // -- includes -----
 #include "TrackerDeviceEnumerator.h"
 #include "ServerUtility.h"
-#include "USBAsyncRequestManager.h"
+#include "USBDeviceManager.h"
 #include "assert.h"
 #include "libusb.h"
 #include "string.h"
@@ -31,7 +31,7 @@ TrackerDeviceEnumerator::TrackerDeviceEnumerator()
     : m_USBDeviceHandle(k_invalid_usb_device_handle)
     , m_cameraIndex(0)
 {
-    USBAsyncRequestManager *usbRequestMgr = USBAsyncRequestManager::getInstance();
+    USBDeviceManager *usbRequestMgr = USBDeviceManager::getInstance();
 
     assert(m_deviceType >= 0 && GET_DEVICE_TYPE_INDEX(m_deviceType) < MAX_CAMERA_TYPE_INDEX);
     m_USBDeviceHandle = usbRequestMgr->getFirstUSBDeviceHandle();
@@ -68,7 +68,7 @@ bool TrackerDeviceEnumerator::is_valid() const
 
 bool TrackerDeviceEnumerator::next()
 {
-    USBAsyncRequestManager *usbRequestMgr= USBAsyncRequestManager::getInstance();
+    USBDeviceManager *usbRequestMgr= USBDeviceManager::getInstance();
     bool foundValid = false;
 
     while (is_valid() && !foundValid)
@@ -98,7 +98,7 @@ static bool get_usb_tracker_type(t_usb_device_handle usb_device_handle, CommonDe
     USBDeviceInfo devInfo;
     bool bIsValidDevice = false;
 
-    if (USBAsyncRequestManager::getInstance()->getUSBDeviceInfo(usb_device_handle, devInfo))
+    if (USBDeviceManager::getInstance()->getUSBDeviceInfo(usb_device_handle, devInfo))
     {
         // See if the next filtered device is a camera that we care about
         for (int tracker_type_index = 0; tracker_type_index < MAX_CAMERA_TYPE_INDEX; ++tracker_type_index)

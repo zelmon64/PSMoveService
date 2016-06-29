@@ -1,5 +1,5 @@
 //-- includes -----
-#include "USBAsyncRequestManager.h"
+#include "USBDeviceManager.h"
 #include "USBDeviceInfo.h"
 #include "ServerLog.h"
 #include "ServerUtility.h"
@@ -19,7 +19,7 @@ class USBBulkTransferBundle
 {
 public:
     USBBulkTransferBundle(
-        USBAsyncRequestManager::RequestPayload_StartBulkTransfer &request,
+        USBDeviceManager::RequestPayload_StartBulkTransfer &request,
         libusb_device *dev,
         libusb_device_handle *dev_handle)
         : m_request(request)
@@ -291,7 +291,7 @@ protected:
     }
 
 private:
-    USBAsyncRequestManager::RequestPayload_StartBulkTransfer m_request;
+    USBDeviceManager::RequestPayload_StartBulkTransfer m_request;
     struct libusb_device *m_device;
     struct libusb_device_handle *m_device_handle;
 
@@ -303,7 +303,7 @@ private:
 
 // -USBAsyncRequestManagerImpl-
 /// Internal implementation of the USB async request manager.
-class USBAsyncRequestManagerImpl
+class USBDeviceManagerImpl
 {
 protected:
     struct LibUSBDeviceState
@@ -315,7 +315,7 @@ protected:
     };
 
 public:
-    USBAsyncRequestManagerImpl(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length)
+    USBDeviceManagerImpl(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length)
         : m_usb_context(nullptr)
         , m_exit_signaled({ false })
         , m_active_control_transfers(0)
@@ -327,7 +327,7 @@ public:
         }
     }
 
-    virtual ~USBAsyncRequestManagerImpl()
+    virtual ~USBDeviceManagerImpl()
     {
     }
 
@@ -502,7 +502,7 @@ public:
     }
 
     // -- Request Queue ----
-    bool submitTransferRequest(const USBAsyncRequestManager::USBTransferRequest &request)
+    bool submitTransferRequest(const USBDeviceManager::USBTransferRequest &request)
     {
         return request_queue.push(request);
     }
@@ -513,7 +513,7 @@ protected:
         if (!m_thread_started)
         {
             SERVER_LOG_INFO("USBAsyncRequestManager::startup") << "Starting USB event thread";
-            m_worker_thread = std::thread(&USBAsyncRequestManagerImpl::workerThreadFunc, this);
+            m_worker_thread = std::thread(&USBDeviceManagerImpl::workerThreadFunc, this);
             m_thread_started = true;
         }
     }
@@ -530,18 +530,18 @@ protected:
         while (!m_exit_signaled)
         {
             // Process incoming USB transfer requests
-            USBAsyncRequestManager::USBTransferRequest request;
+            USBDeviceManager::USBTransferRequest request;
             while (request_queue.pop(request))
             {
                 switch (request.request_type)
                 {
-                case USBAsyncRequestManager::_USBRequestType_ControlTransfer:
+                case USBDeviceManager::_USBRequestType_ControlTransfer:
                     handleControlTransferRequest(request.payload.control_transfer);
                     break;
-                case USBAsyncRequestManager::_USBRequestType_StartBulkTransfer:
+                case USBDeviceManager::_USBRequestType_StartBulkTransfer:
                     handleStartBulkTransferRequest(request.payload.start_bulk_transfer);
                     break;
-                case USBAsyncRequestManager::_USBRequestType_StopBulkTransfer:
+                case USBDeviceManager::_USBRequestType_StopBulkTransfer:
                     handleCancelBulkTransferRequest(request.payload.stop_bulk_transfer);
                     break;
                 }
@@ -601,12 +601,12 @@ protected:
         }
     }
 
-    void handleControlTransferRequest(USBAsyncRequestManager::RequestPayload_ControlTransfer &request)
+    void handleControlTransferRequest(USBDeviceManager::RequestPayload_ControlTransfer &request)
     {
         //TODO
     }
 
-    void handleStartBulkTransferRequest(USBAsyncRequestManager::RequestPayload_StartBulkTransfer &request)
+    void handleStartBulkTransferRequest(USBDeviceManager::RequestPayload_StartBulkTransfer &request)
     {
         LibUSBDeviceState *state = get_libusb_state_from_handle(request.usb_device_handle);
 
@@ -683,7 +683,7 @@ protected:
         }
     }
 
-    void handleCancelBulkTransferRequest(USBAsyncRequestManager::RequestPayload_StopBulkTransfer &request)
+    void handleCancelBulkTransferRequest(USBDeviceManager::RequestPayload_StopBulkTransfer &request)
     {
         libusb_device *dev = get_libusb_device_from_handle(request.usb_device_handle);
 
@@ -866,7 +866,7 @@ private:
     // Multithreaded state
     libusb_context* m_usb_context;
     std::atomic_bool m_exit_signaled;
-    boost::lockfree::spsc_queue<USBAsyncRequestManager::USBTransferRequest, boost::lockfree::capacity<128> > request_queue;
+    boost::lockfree::spsc_queue<USBDeviceManager::USBTransferRequest, boost::lockfree::capacity<128> > request_queue;
 
     // Worker thread state
     std::vector<USBBulkTransferBundle *> m_active_bulk_transfer_bundles;
@@ -881,14 +881,14 @@ private:
 };
 
 //-- public interface -----
-USBAsyncRequestManager *USBAsyncRequestManager::m_instance = NULL;
+USBDeviceManager *USBDeviceManager::m_instance = NULL;
 
-USBAsyncRequestManager::USBAsyncRequestManager(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length)
-    : implementation_ptr(new USBAsyncRequestManagerImpl(device_whitelist, device_whitelist_length))
+USBDeviceManager::USBDeviceManager(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length)
+    : implementation_ptr(new USBDeviceManagerImpl(device_whitelist, device_whitelist_length))
 {
 }
 
-USBAsyncRequestManager::~USBAsyncRequestManager()
+USBDeviceManager::~USBDeviceManager()
 {
     if (m_instance != NULL)
     {
@@ -902,64 +902,64 @@ USBAsyncRequestManager::~USBAsyncRequestManager()
     }
 }
 
-bool USBAsyncRequestManager::startup()
+bool USBDeviceManager::startup()
 {
     m_instance = this;
     return implementation_ptr->startup();
 }
 
-void USBAsyncRequestManager::update()
+void USBDeviceManager::update()
 {
     implementation_ptr->update();
 }
 
-void USBAsyncRequestManager::shutdown()
+void USBDeviceManager::shutdown()
 {
     implementation_ptr->shutdown();
     m_instance = NULL;
 }
 
-bool USBAsyncRequestManager::openUSBDevice(t_usb_device_handle handle)
+bool USBDeviceManager::openUSBDevice(t_usb_device_handle handle)
 {
     return implementation_ptr->openUSBDevice(handle);
 }
 
-void USBAsyncRequestManager::closeUSBDevice(t_usb_device_handle handle)
+void USBDeviceManager::closeUSBDevice(t_usb_device_handle handle)
 {
     implementation_ptr->closeUSBDevice(handle);
 }
 
-int USBAsyncRequestManager::getUSBDeviceCount() const
+int USBDeviceManager::getUSBDeviceCount() const
 {
     return implementation_ptr->getUSBDeviceCount();
 }
 
-t_usb_device_handle USBAsyncRequestManager::getFirstUSBDeviceHandle() const
+t_usb_device_handle USBDeviceManager::getFirstUSBDeviceHandle() const
 {
     return implementation_ptr->getFirstUSBDeviceHandle();
 }
 
-t_usb_device_handle USBAsyncRequestManager::getNextUSBDeviceHandle(t_usb_device_handle handle) const
+t_usb_device_handle USBDeviceManager::getNextUSBDeviceHandle(t_usb_device_handle handle) const
 {
     return implementation_ptr->getNextUSBDeviceHandle(handle);
 }
 
-bool USBAsyncRequestManager::getUSBDeviceInfo(t_usb_device_handle handle, USBDeviceInfo &outDeviceInfo) const
+bool USBDeviceManager::getUSBDeviceInfo(t_usb_device_handle handle, USBDeviceInfo &outDeviceInfo) const
 {
     return implementation_ptr->getUSBDeviceInfo(handle, outDeviceInfo);
 }
 
-bool USBAsyncRequestManager::getUSBDevicePath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const
+bool USBDeviceManager::getUSBDevicePath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const
 {
     return implementation_ptr->getUSBDevicePath(handle, outBuffer, bufferSize);
 }
 
-bool USBAsyncRequestManager::getIsUSBDeviceOpen(t_usb_device_handle handle) const
+bool USBDeviceManager::getIsUSBDeviceOpen(t_usb_device_handle handle) const
 {
     return implementation_ptr->getIsUSBDeviceOpen(handle);
 }
 
-bool USBAsyncRequestManager::submitTransferRequest(const USBTransferRequest &request)
+bool USBDeviceManager::submitTransferRequest(const USBTransferRequest &request)
 {
     return implementation_ptr->submitTransferRequest(request);
 }

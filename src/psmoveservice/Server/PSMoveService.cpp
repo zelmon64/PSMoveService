@@ -6,7 +6,7 @@
 #include "ServerRequestHandler.h"
 #include "DeviceManager.h"
 #include "ServerLog.h"
-#include "USBAsyncRequestManager.h"
+#include "USBDeviceManager.h"
 
 #include <boost/asio.hpp>
 #include <boost/application.hpp>
@@ -47,7 +47,7 @@ public:
     PSMoveServiceImpl()
         : m_io_service()
         , m_signals(m_io_service)
-        , m_usb_async_request_manager(k_usb_device_whitelist, 1)
+        , m_usb_device_manager(k_usb_device_whitelist, 1)
         , m_device_manager()
         , m_request_handler(&m_device_manager)
         , m_network_manager(&m_io_service, PSMOVE_SERVER_PORT, &m_request_handler)
@@ -159,7 +159,7 @@ private:
         /** Setup the usb async transfer thread before we attempt to initialize the trackers */
         if (success)
         {
-            if (!m_usb_async_request_manager.startup())
+            if (!m_usb_device_manager.startup())
             {
                 SERVER_LOG_FATAL("PSMoveService") << "Failed to initialize the usb async request manager";
                 success = false;
@@ -196,7 +196,7 @@ private:
         m_request_handler.update();
 
         /** Process any async results from the USB transfer thread */
-        m_usb_async_request_manager.update();
+        m_usb_device_manager.update();
 
         /**
          Update the list of active tracked controllers
@@ -217,7 +217,7 @@ private:
         m_device_manager.shutdown();
 
         // Shutdown the usb async request thread
-        m_usb_async_request_manager.shutdown();
+        m_usb_device_manager.shutdown();
 
         // Close all active network connections
         m_network_manager.shutdown();
@@ -238,7 +238,7 @@ private:
     boost::asio::signal_set m_signals;
 
     // Manages all control and bulk transfer requests in another thread
-    USBAsyncRequestManager m_usb_async_request_manager;
+    USBDeviceManager m_usb_device_manager;
 
     // Keep track of currently connected devices (PSMove controllers, cameras, HMDs)
     DeviceManager m_device_manager;

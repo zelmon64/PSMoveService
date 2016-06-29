@@ -1,18 +1,18 @@
-#ifndef USB_ASYNC_REQUEST_MANAGER_H
-#define USB_ASYNC_REQUEST_MANAGER_H
+#ifndef USB_DEVICE_MANAGER_H
+#define USB_DEVICE_MANAGER_H
 
 //-- includes -----
 #include "USBDeviceInfo.h"
 
 //-- definitions -----
 /// Manages async control and bulk transfer requests to usb devices via libusb.
-class USBAsyncRequestManager
+class USBDeviceManager
 {
 public:
-    USBAsyncRequestManager(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length);
-    virtual ~USBAsyncRequestManager();
+    USBDeviceManager(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length);
+    virtual ~USBDeviceManager();
 
-    static inline USBAsyncRequestManager *getInstance()
+    static inline USBDeviceManager *getInstance()
     {
         return m_instance;
     }
@@ -86,14 +86,14 @@ public:
 
 private:
     // Always use the overloaded constructor
-    USBAsyncRequestManager();
+    USBDeviceManager();
 
     /// private implementation
-    class USBAsyncRequestManagerImpl *implementation_ptr;
+    class USBDeviceManagerImpl *implementation_ptr;
 
     /// Singleton instance of the class
     /// Assigned in startup, cleared in teardown
-    static USBAsyncRequestManager *m_instance;
+    static USBDeviceManager *m_instance;
 };
 
-#endif  // USB_ASYNC_REQUEST_MANAGER_H
+#endif  // USB_DEVICE_MANAGER_H
