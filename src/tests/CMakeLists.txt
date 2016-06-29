@@ -215,6 +215,7 @@ list(APPEND TEST_CTRLR_INCL_DIRS
     ${ROOT_DIR}/src/psmoveservice/Server
     ${ROOT_DIR}/src/psmoveservice/Device/Enumerator
     ${ROOT_DIR}/src/psmoveservice/Device/Interface
+    ${ROOT_DIR}/src/psmoveservice/Device/USB
     ${ROOT_DIR}/src/psmoveservice/Platform
     ${ROOT_DIR}/src/psmoveservice/PSMoveConfig
     ${ROOT_DIR}/src/psmoveservice/PSMoveController)
@@ -226,6 +227,7 @@ list(APPEND TEST_CTRLR_SRC
     ${ROOT_DIR}/src/psmoveservice/Server/ServerUtility.cpp
     ${ROOT_DIR}/src/psmoveservice/Device/Enumerator/ControllerDeviceEnumerator.h    
     ${ROOT_DIR}/src/psmoveservice/Device/Enumerator/ControllerDeviceEnumerator.cpp
+    ${ROOT_DIR}/src/psmoveservice/Device/USB/USBDeviceInfo.h
     ${ROOT_DIR}/src/psmoveservice/Platform/BluetoothQueries.h
     ${ROOT_DIR}/src/psmoveservice/PSMoveConfig/PSMoveConfig.h
     ${ROOT_DIR}/src/psmoveservice/PSMoveConfig/PSMoveConfig.cpp
