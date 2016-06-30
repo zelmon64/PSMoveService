@@ -10,7 +10,7 @@ class USBBulkTransferBundle
 {
 public:
     USBBulkTransferBundle(
-        USBRequestPayload_BulkTransfer &request,
+        const USBRequestPayload_BulkTransfer &request,
         struct libusb_device *dev,
         struct libusb_device_handle *dev_handle);
     virtual ~USBBulkTransferBundle();

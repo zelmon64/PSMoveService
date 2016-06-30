@@ -13,7 +13,7 @@ static void LIBUSB_CALL transfer_callback_function(struct libusb_transfer *bulk_
 
 //-- implementation -----
 USBBulkTransferBundle::USBBulkTransferBundle(
-    USBRequestPayload_BulkTransfer &request,
+    const USBRequestPayload_BulkTransfer &request,
     libusb_device *dev,
     libusb_device_handle *dev_handle)
     : m_request(request)

@@ -3,6 +3,7 @@
 
 //-- includes -----
 #include "USBDeviceRequest.h"
+#include <functional>
 
 //-- definitions -----
 /// Manages async control and bulk transfer requests to usb devices via libusb.
@@ -15,6 +16,11 @@ public:
     static inline USBDeviceManager *getInstance()
     {
         return m_instance;
+    }
+
+    inline class USBDeviceManagerImpl *getImplementation()
+    {
+        return m_implementation_ptr;
     }
 
     // -- System ----
@@ -36,14 +42,18 @@ public:
 
     // -- Request Queue ----
     // Send the transfer request to the worker thread
-    bool submitTransferRequest(const USBTransferRequest &request);
+    bool submitTransferRequest(
+        const USBTransferRequest &request,
+        std::function<void(USBTransferResult&)> callback = noop_transfer_result_callback);
+
+    static void noop_transfer_result_callback(USBTransferResult &result) {};
 
 private:
     // Always use the overloaded constructor
     USBDeviceManager();
 
     /// private implementation
-    class USBDeviceManagerImpl *implementation_ptr;
+    class USBDeviceManagerImpl *m_implementation_ptr;
 
     /// Singleton instance of the class
     /// Assigned in startup, cleared in teardown

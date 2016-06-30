@@ -19,6 +19,18 @@
 class USBDeviceManagerImpl
 {
 protected:
+    struct RequestState
+    {
+        USBTransferRequest request;
+        std::function<void(USBTransferResult&)> callback;
+    };
+
+    struct ResultState
+    {
+        USBTransferResult result;
+        std::function<void(USBTransferResult&)> callback;
+    };
+
     struct LibUSBDeviceState
     {
         t_usb_device_handle handle;
@@ -64,6 +76,14 @@ public:
 
     void update()
     {
+        ResultState resultState;
+
+        // Process all pending results
+        while (result_queue.pop(resultState))
+        {
+            // Fire the callback on the result
+            resultState.callback(resultState.result);
+        }
     }
 
     void shutdown()
@@ -215,9 +235,11 @@ public:
     }
 
     // -- Request Queue ----
-    bool submitTransferRequest(const USBTransferRequest &request)
+    bool submitTransferRequest(const USBTransferRequest &request, std::function<void(USBTransferResult&)> callback)
     {
-        return request_queue.push(request);
+        RequestState requestState = {request, callback};
+
+        return request_queue.push(requestState);
     }
 
 protected:
@@ -243,19 +265,19 @@ protected:
         while (!m_exit_signaled)
         {
             // Process incoming USB transfer requests
-            USBTransferRequest request;
-            while (request_queue.pop(request))
+            RequestState requestState;
+            while (request_queue.pop(requestState))
             {
-                switch (request.request_type)
+                switch (requestState.request.request_type)
                 {
                 case eUSBTransferRequestType::_USBRequestType_ControlTransfer:
-                    handleControlTransferRequest(request.payload.control_transfer);
+                    handleControlTransferRequest(requestState);
                     break;
                 case eUSBTransferRequestType::_USBRequestType_StartBulkTransfer:
-                    handleStartBulkTransferRequest(request.payload.start_bulk_transfer);
+                    handleStartBulkTransferRequest(requestState);
                     break;
                 case eUSBTransferRequestType::_USBRequestType_CancelBulkTransfer:
-                    handleCancelBulkTransferRequest(request.payload.cancel_bulk_transfer);
+                    handleCancelBulkTransferRequest(requestState);
                     break;
                 }
             }
@@ -288,8 +310,8 @@ protected:
             m_canceled_bulk_transfer_bundles.push_back(bundle);
         }
 
-        // Wait for the canceled transfers to exit
-        while (m_canceled_bulk_transfer_bundles.size() > 0)
+        // Wait for the canceled bulk transfers and control transfers to exit
+        while (m_canceled_bulk_transfer_bundles.size() > 0 && m_active_control_transfers > 0)
         {
             // Give libusb a change to process the cancellation requests
             libusb_handle_events_timeout_completed(m_usb_context, &tv, NULL);
@@ -314,14 +336,206 @@ protected:
         }
     }
 
-    void handleControlTransferRequest(USBRequestPayload_ControlTransfer &request)
+    void handleControlTransferRequest(const RequestState &requestState)
     {
-        //TODO
+        const USBRequestPayload_ControlTransfer &request = requestState.request.payload.control_transfer;
+
+        LibUSBDeviceState *state = get_libusb_state_from_handle(request.usb_device_handle);
+        eUSBResultCode result_code;
+        bool bSuccess= false;
+
+        if (state != nullptr)
+        {
+            RequestState *requestStateOnHeap= nullptr;
+            struct libusb_transfer *transfer;
+            unsigned char *buffer;
+
+            if (bSuccess)
+            {
+                transfer = libusb_alloc_transfer(0);
+                if (transfer == nullptr)
+                {
+                    result_code = _USBResultCode_NoMemory;
+                }
+            }
+
+            if (bSuccess)
+            {
+                buffer = (unsigned char*)malloc(LIBUSB_CONTROL_SETUP_SIZE + request.wLength);
+                if (buffer == nullptr)
+                {
+                    result_code = _USBResultCode_NoMemory;
+                }
+            }
+
+            if (bSuccess)
+            {
+                requestStateOnHeap= new RequestState;
+                if (requestStateOnHeap == nullptr)
+                {
+                    result_code = _USBResultCode_NoMemory;
+                }
+            }
+
+            if (bSuccess)
+            {
+                int libusb_result= LIBUSB_SUCCESS;
+
+                libusb_fill_control_setup(
+                    buffer,
+                    request.bmRequestType,
+                    request.bRequest,
+                    request.wValue,
+                    request.wIndex,
+                    request.wLength);
+
+                if ((request.bmRequestType & LIBUSB_ENDPOINT_DIR_MASK) == LIBUSB_ENDPOINT_OUT)
+                {
+                    memcpy(buffer + LIBUSB_CONTROL_SETUP_SIZE, request.data, request.wLength);
+                }
+
+                // Make a copy of the request on the heap so that it's safe
+                // to point to in the transfer userdata
+                requestStateOnHeap->request= requestState.request;
+                requestStateOnHeap->callback= requestState.callback;
+
+                libusb_fill_control_transfer(
+                    transfer,
+                    state->device_handle,
+                    buffer,
+                    control_transfer_cb,
+                    requestStateOnHeap,
+                    request.timeout);
+                transfer->flags = LIBUSB_TRANSFER_FREE_BUFFER;
+
+                libusb_result = libusb_submit_transfer(transfer);
+                if (libusb_result == LIBUSB_SUCCESS)
+                {
+                    // One more active control transfer
+                    ++m_active_control_transfers;
+
+                    bSuccess = true;
+                    result_code = _USBResultCode_Started;
+                }
+                else
+                {
+                    result_code = _USBResultCode_SubmitFailed;
+                }
+            }
+
+            if (!bSuccess)
+            {
+                if (transfer != nullptr)
+                {
+                    libusb_free_transfer(transfer);
+                }
+
+                if (buffer != nullptr)
+                {
+                    free(buffer);
+                }
+
+                if (requestStateOnHeap != nullptr)
+                {
+                    delete requestStateOnHeap;
+                }
+            }
+        }
+        else
+        {
+            result_code = _USBResultCode_BadHandle;
+        }
+
+        // If the control transfer didn't successfully start, post a failure result now
+        if (!bSuccess)
+        {
+            USBTransferResult result;
+
+            memset(&result, 0, sizeof(USBTransferResult));
+            result.payload.control_transfer.usb_device_handle= request.usb_device_handle;
+            result.payload.control_transfer.result_code= result_code;
+            result.result_type = _USBResultType_ControlTransfer;
+
+            postUSBTransferResult(result, requestState.callback);
+        }
     }
 
-    void handleStartBulkTransferRequest(USBRequestPayload_BulkTransfer &request)
+    static void LIBUSB_CALL control_transfer_cb(struct libusb_transfer *transfer)
     {
+        const RequestState *requestStateOnHeap = reinterpret_cast<const RequestState *>(transfer->user_data);
+        const USBRequestPayload_ControlTransfer *request= &requestStateOnHeap->request.payload.control_transfer;
+
+        USBTransferResult result;
+
+        memset(&result, 0, sizeof(USBTransferResult));
+        result.result_type= _USBResultType_ControlTransfer;
+        result.payload.control_transfer.usb_device_handle= request->usb_device_handle;
+                
+        if ((request->bmRequestType & LIBUSB_ENDPOINT_DIR_MASK) == LIBUSB_ENDPOINT_IN && 
+            transfer->actual_length > 0)
+        {
+            memcpy(&result.payload.control_transfer.data, libusb_control_transfer_get_data(transfer), transfer->actual_length);
+            result.payload.control_transfer.dataLength= transfer->length;
+        }        
+
+        switch (transfer->status) 
+        {
+        case LIBUSB_TRANSFER_COMPLETED:
+            result.payload.control_transfer.result_code= _USBResultCode_Completed;
+            break;
+        case LIBUSB_TRANSFER_TIMED_OUT:
+            result.payload.control_transfer.result_code = _USBResultCode_TimedOut;
+            break;
+        case LIBUSB_TRANSFER_STALL:
+            result.payload.control_transfer.result_code = _USBResultCode_Pipe;
+            break;
+        case LIBUSB_TRANSFER_NO_DEVICE:
+            result.payload.control_transfer.result_code = _USBResultCode_DeviceNotOpen;
+            break;
+        case LIBUSB_TRANSFER_OVERFLOW:
+            result.payload.control_transfer.result_code = _USBResultCode_Overflow;
+            break;
+        case LIBUSB_TRANSFER_ERROR:
+            result.payload.control_transfer.result_code = _USBResultCode_GeneralError;
+            break;
+        case LIBUSB_TRANSFER_CANCELLED:
+            result.payload.control_transfer.result_code = _USBResultCode_Canceled;
+            break;
+        default:
+            result.payload.control_transfer.result_code = _USBResultCode_GeneralError;
+        }
+
+        // Add the result to the outgoing result queue
+        USBDeviceManager::getInstance()->getImplementation()->postUSBTransferResult(result, requestStateOnHeap->callback);
+
+        // Free request state stored in the heap now that the result is posted
+        delete requestStateOnHeap;
+
+        // Free the libusb allocated transfer
+        libusb_free_transfer(transfer);
+    }
+
+    void postUSBTransferResult(const USBTransferResult &result, std::function<void(USBTransferResult&)> callback)
+    {
+        ResultState state = {result, callback};
+
+        // If a control transfer just completed (successfully or unsuccessfully)
+        // decrement the outstanding control transfer count
+        if (result.result_type == _USBResultType_ControlTransfer)
+        {
+            assert(m_active_control_transfers > 0);
+            --m_active_control_transfers;
+        }
+
+        result_queue.push(state);
+    }
+
+    void handleStartBulkTransferRequest(const RequestState &requestState)
+    {
+        const USBRequestPayload_BulkTransfer &request= requestState.request.payload.start_bulk_transfer;
+
         LibUSBDeviceState *state = get_libusb_state_from_handle(request.usb_device_handle);
+        eUSBResultCode result_code;
 
         if (state != nullptr)
         {
@@ -366,39 +580,48 @@ protected:
                                 delete bundle;
                             }
 
-                            SERVER_MT_LOG_ERROR("USBAsyncRequestManager::handleStartBulkTransferRequest")
-                                << "Failed to start all bulk transfer bundle for device " << request.usb_device_handle;
+                            result_code = _USBResultCode_SubmitFailed;
                         }
                     }
                     else
                     {
-                        SERVER_MT_LOG_ERROR("USBAsyncRequestManager::handleStartBulkTransferRequest")
-                            << "Failed to initialize bulk transfer bundle for device " << request.usb_device_handle;
+                        result_code = _USBResultCode_NoMemory;
                         delete bundle;
                     }
                 }
                 else
                 {
-                    SERVER_MT_LOG_WARNING("USBAsyncRequestManager::handleStartBulkTransferRequest")
-                        << "Already started bulk transfer request for device " << request.usb_device_handle;
+                    result_code = _USBResultCode_TransferAlreadyStarted;
                 }
             }
             else
             {
-                SERVER_MT_LOG_WARNING("USBAsyncRequestManager::handleStartBulkTransferRequest")
-                    << "Already started bulk transfer request for device " << request.usb_device_handle;
+                result_code = _USBResultCode_DeviceNotOpen;
             }
         }
         else
         {
-            SERVER_MT_LOG_WARNING("USBAsyncRequestManager::handleStartBulkTransferRequest")
-                << "Invalid device handle " << request.usb_device_handle;
+            result_code = _USBResultCode_BadHandle;
+        }
+
+        // Post the transfer result to the outbound result queue
+        {
+            USBTransferResult result;
+
+            result.result_type = _USBResultType_BulkTransfer;
+            result.payload.bulk_transfer.usb_device_handle= request.usb_device_handle;
+            result.payload.bulk_transfer.result_code = result_code;
+
+            postUSBTransferResult(result, requestState.callback);
         }
     }
 
-    void handleCancelBulkTransferRequest(USBRequestPayload_CancelBulkTransfer &request)
+    void handleCancelBulkTransferRequest(const RequestState &requestState)
     {
+        const USBRequestPayload_CancelBulkTransfer &request= requestState.request.payload.cancel_bulk_transfer;
+
         libusb_device *dev = get_libusb_device_from_handle(request.usb_device_handle);
+        eUSBResultCode result_code;
 
         if (dev != nullptr)
         {
@@ -423,17 +646,28 @@ protected:
                 // Put the bundle on the list of canceled transfers.
                 // The bundle will get cleaned up once all active transfers are done.
                 m_canceled_bulk_transfer_bundles.push_back(bundle);
+
+                result_code = _USBResultCode_Canceled;
             }
             else
             {
-                SERVER_MT_LOG_WARNING("USBAsyncRequestManager::handleStopBulkTransferRequest")
-                    << "Bulk transfer bundle not active for device " << request.usb_device_handle;
+                result_code = _USBResultCode_TransferNotActive;
             }
         }
         else
         {
-            SERVER_MT_LOG_ERROR("USBAsyncRequestManager::handleStartBulkTransferRequest")
-                << "Invalid device handle " << request.usb_device_handle;
+            result_code= _USBResultCode_BadHandle;
+        }
+
+        // Post the transfer result to the outbound result queue
+        {
+            USBTransferResult result;
+
+            result.result_type = _USBResultType_BulkTransfer;
+            result.payload.bulk_transfer.usb_device_handle = request.usb_device_handle;
+            result.payload.bulk_transfer.result_code = result_code;
+
+            postUSBTransferResult(result, requestState.callback);
         }
     }
 
@@ -579,7 +813,8 @@ private:
     // Multithreaded state
     libusb_context* m_usb_context;
     std::atomic_bool m_exit_signaled;
-    boost::lockfree::spsc_queue<USBTransferRequest, boost::lockfree::capacity<128> > request_queue;
+    boost::lockfree::spsc_queue<RequestState, boost::lockfree::capacity<128> > request_queue;
+    boost::lockfree::spsc_queue<ResultState, boost::lockfree::capacity<128> > result_queue;
 
     // Worker thread state
     std::vector<USBBulkTransferBundle *> m_active_bulk_transfer_bundles;
@@ -597,7 +832,7 @@ private:
 USBDeviceManager *USBDeviceManager::m_instance = NULL;
 
 USBDeviceManager::USBDeviceManager(struct USBDeviceInfo *device_whitelist, size_t device_whitelist_length)
-    : implementation_ptr(new USBDeviceManagerImpl(device_whitelist, device_whitelist_length))
+    : m_implementation_ptr(new USBDeviceManagerImpl(device_whitelist, device_whitelist_length))
 {
 }
 
@@ -608,71 +843,73 @@ USBDeviceManager::~USBDeviceManager()
         SERVER_LOG_ERROR("~USBAsyncRequestManager()") << "USB Async Request Manager deleted without shutdown() getting called first";
     }
 
-    if (implementation_ptr != nullptr)
+    if (m_implementation_ptr != nullptr)
     {
-        delete implementation_ptr;
-        implementation_ptr = nullptr;
+        delete m_implementation_ptr;
+        m_implementation_ptr = nullptr;
     }
 }
 
 bool USBDeviceManager::startup()
 {
     m_instance = this;
-    return implementation_ptr->startup();
+    return m_implementation_ptr->startup();
 }
 
 void USBDeviceManager::update()
 {
-    implementation_ptr->update();
+    m_implementation_ptr->update();
 }
 
 void USBDeviceManager::shutdown()
 {
-    implementation_ptr->shutdown();
+    m_implementation_ptr->shutdown();
     m_instance = NULL;
 }
 
 bool USBDeviceManager::openUSBDevice(t_usb_device_handle handle)
 {
-    return implementation_ptr->openUSBDevice(handle);
+    return m_implementation_ptr->openUSBDevice(handle);
 }
 
 void USBDeviceManager::closeUSBDevice(t_usb_device_handle handle)
 {
-    implementation_ptr->closeUSBDevice(handle);
+    m_implementation_ptr->closeUSBDevice(handle);
 }
 
 int USBDeviceManager::getUSBDeviceCount() const
 {
-    return implementation_ptr->getUSBDeviceCount();
+    return m_implementation_ptr->getUSBDeviceCount();
 }
 
 t_usb_device_handle USBDeviceManager::getFirstUSBDeviceHandle() const
 {
-    return implementation_ptr->getFirstUSBDeviceHandle();
+    return m_implementation_ptr->getFirstUSBDeviceHandle();
 }
 
 t_usb_device_handle USBDeviceManager::getNextUSBDeviceHandle(t_usb_device_handle handle) const
 {
-    return implementation_ptr->getNextUSBDeviceHandle(handle);
+    return m_implementation_ptr->getNextUSBDeviceHandle(handle);
 }
 
 bool USBDeviceManager::getUSBDeviceInfo(t_usb_device_handle handle, USBDeviceInfo &outDeviceInfo) const
 {
-    return implementation_ptr->getUSBDeviceInfo(handle, outDeviceInfo);
+    return m_implementation_ptr->getUSBDeviceInfo(handle, outDeviceInfo);
 }
 
 bool USBDeviceManager::getUSBDevicePath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const
 {
-    return implementation_ptr->getUSBDevicePath(handle, outBuffer, bufferSize);
+    return m_implementation_ptr->getUSBDevicePath(handle, outBuffer, bufferSize);
 }
 
 bool USBDeviceManager::getIsUSBDeviceOpen(t_usb_device_handle handle) const
 {
-    return implementation_ptr->getIsUSBDeviceOpen(handle);
+    return m_implementation_ptr->getIsUSBDeviceOpen(handle);
 }
 
-bool USBDeviceManager::submitTransferRequest(const USBTransferRequest &request)
+bool USBDeviceManager::submitTransferRequest(
+    const USBTransferRequest &request,
+    std::function<void(USBTransferResult&)> callback)
 {
-    return implementation_ptr->submitTransferRequest(request);
+    return m_implementation_ptr->submitTransferRequest(request, callback);
 }
