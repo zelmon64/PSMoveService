@@ -3,6 +3,12 @@
 
 #include "stdlib.h" // size_t
 
+//-- macros -----
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(_A) (sizeof(_A) / sizeof((_A)[0]))
+#endif
+
+//-- utility methods -----
 namespace ServerUtility
 {
     template <typename t_index>
