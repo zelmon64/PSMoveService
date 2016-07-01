@@ -137,7 +137,24 @@ ENDIF()
 list(APPEND TEST_CAMERA_INCL_DIRS ${ROOT_DIR}/src/psmoveservice/PSMoveTracker/PSEye)
 list(APPEND TEST_CAMERA_SRC
     ${ROOT_DIR}/src/psmoveservice/PSMoveTracker/PSEye/PSEyeVideoCapture.h
-    ${ROOT_DIR}/src/psmoveservice/PSMoveTracker/PSEye/PSEyeVideoCapture.cpp)
+    ${ROOT_DIR}/src/psmoveservice/PSMoveTracker/PSEye/PSEyeVideoCapture.cpp
+    ${ROOT_DIR}/src/psmoveservice/PSMoveTracker/PSEye/PS3EyeLibUSBCapture.h
+    ${ROOT_DIR}/src/psmoveservice/PSMoveTracker/PSEye/PS3EyeLibUSBCapture.cpp)
+
+# Asyncpp - lightweight header only asychronous task library
+list(APPEND TEST_CAMERA_INCL_DIRS ${ROOT_DIR}/thirdparty/asyncpp/)
+    
+# USB Device Management    
+list(APPEND TEST_CAMERA_INCL_DIRS 
+    ${ROOT_DIR}/src/psmoveservice/Device/Manager
+    ${ROOT_DIR}/src/psmoveservice/Device/USB)
+list(APPEND TEST_CAMERA_SRC
+    ${ROOT_DIR}/src/psmoveservice/Device/Manager/USBDeviceManager.h
+    ${ROOT_DIR}/src/psmoveservice/Device/Manager/USBDeviceManager.cpp
+    ${ROOT_DIR}/src/psmoveservice/Device/USB/USBDeviceInfo.h
+    ${ROOT_DIR}/src/psmoveservice/Device/USB/USBDeviceRequest.h
+    ${ROOT_DIR}/src/psmoveservice/Device/USB/USBBulkTransferBundle.h
+    ${ROOT_DIR}/src/psmoveservice/Device/USB/USBBulkTransferBundle.cpp)    
 
 # The test_camera app
 add_executable(test_camera ${CMAKE_CURRENT_LIST_DIR}/test_camera.cpp ${TEST_CAMERA_SRC})

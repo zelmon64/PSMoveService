@@ -1,14 +1,24 @@
 #include "PSEyeVideoCapture.h"
+#include "PS3EyeLibUSBCapture.h"
+#include "USBDeviceManager.h"
+
+#include "async/async.hpp"
+
 #include <opencv2/videoio/videoio.hpp>
 #include <opencv2/videoio/videoio_c.h>
 #include "opencv2/imgproc.hpp"
+
 #include <iostream>
+#include <deque>
+
 #ifdef HAVE_PS3EYE
 #include "ps3eye.h"
 #endif
+
 #ifdef HAVE_CLEYE
 #include "CLEyeMulticam.h"
 #include "USBDeviceInterfaceWin32.h"
+
 const uint16_t VENDOR_ID = 0x1415;
 const uint16_t PRODUCT_ID = 0x2000;
 const char *CLEYE_DRIVER_PROVIDER_NAME = "Code Laboratories, Inc.";
@@ -21,8 +31,9 @@ enum
     PSEYE_CAP_CLMULTI   = 2100,
     PSEYE_CAP_CLEYE     = 2200,
 #endif
+    PSEYE_CAP_PS3EYELIBUSB    = 2300,
 #ifdef HAVE_PS3EYE
-    PSEYE_CAP_PS3EYE    = 2300
+    PSEYE_CAP_PS3EYEDRIVER    = 2400
 #endif
 };
 
@@ -366,7 +377,7 @@ public:
     }
 
     int getCaptureDomain() {
-        return PSEYE_CAP_PS3EYE;
+        return PSEYE_CAP_PS3EYEDRIVER;
     }
     
     bool isOpened() const
@@ -441,8 +452,199 @@ protected:
     cv::Mat m_MatYUV;
     ps3eye::PS3EYECam::PS3EYERef eye;
 };
-
 #endif
+
+/// Implementation of PS3EyeCapture when using PS3EyeLibUSBCapture class
+class PSEYECaptureCAM_LibUSB : public cv::IVideoCapture
+{
+public:
+    PSEYECaptureCAM_LibUSB(int _index)
+        : m_index(-1)
+        , m_width(-1)
+        , m_height(-1)
+        , m_widthStep(-1)
+        , m_size(-1)
+        , m_MatYUV(0, 0, CV_8UC2)
+    {
+        open(_index);
+    }
+
+    ~PSEYECaptureCAM_LibUSB()
+    {
+        close();
+    }
+
+    double getProperty(int property_id) const
+    {
+        switch (property_id)
+        {
+        case CV_CAP_PROP_BRIGHTNESS:
+            return (double)(eye->getBrightness());
+        case CV_CAP_PROP_CONTRAST:
+            return (double)(eye->getContrast());
+        case CV_CAP_PROP_EXPOSURE:
+            // Default 120
+            return (double)(eye->getExposure());
+        case CV_CAP_PROP_FPS:
+            return (double)(eye->getFrameRate());
+        case CV_CAP_PROP_FRAME_HEIGHT:
+            return (double)(eye->getHeight());
+        case CV_CAP_PROP_FRAME_WIDTH:
+            return (double)(eye->getWidth());
+        case CV_CAP_PROP_GAIN:
+            // [0, 63] -> [0, 255]
+            return (double)(eye->getGain())*256.0/64.0;
+        case CV_CAP_PROP_HUE:
+            return (double)(eye->getHue());
+        case CV_CAP_PROP_SHARPNESS:
+            // [0, 63] -> [0, 255]
+            return (double)(eye->getSharpness())*256.0 / 64.0;
+        }
+        return 0;
+    }
+
+    bool setProperty(int property_id, double value)
+    {
+        int val;
+        if (!eye)
+        {
+            return false;
+        }
+        switch (property_id)
+        {
+        case CV_CAP_PROP_BRIGHTNESS:
+            // [0, 255] [20]
+            eye->setBrightness((int)round(value));
+        case CV_CAP_PROP_CONTRAST:
+            // [0, 255] [37]
+            eye->setContrast((int)round(value));
+        case CV_CAP_PROP_EXPOSURE:
+            // [0, 255] [120]
+            eye->setExposure((int)round(value));
+        case CV_CAP_PROP_FPS:
+            return false; //TODO: Modifying FPS probably requires resetting the camera
+        case CV_CAP_PROP_FRAME_HEIGHT:
+            return false; //TODO: Modifying frame size probably requires resetting the camera
+        case CV_CAP_PROP_FRAME_WIDTH:
+            return false;
+        case CV_CAP_PROP_GAIN:
+            // [0, 255] -> [0, 63] [20]
+            val = (int)(value * 64.0 / 256.0);
+            eye->setGain(val);
+        case CV_CAP_PROP_HUE:
+            // [0, 255] [143]
+            eye->setHue((int)round(value));
+        case CV_CAP_PROP_SHARPNESS:
+            // [0, 255] -> [0, 63] [0]
+            val = (int)(value * 64.0 / 256.0);
+            eye->setSharpness((int)round(value));
+        }
+        
+        refreshDimensions();
+        
+        return true;
+    }
+
+    bool grabFrame()
+    {
+        return eye->isStreaming();
+    }
+
+    bool retrieveFrame(int outputType, cv::OutputArray outArray)
+    {
+        uint8_t *new_pixels = eye->getFrame();
+
+        if (new_pixels != NULL)
+        {
+            std::memcpy(m_MatYUV.data, new_pixels, m_MatYUV.total() * m_MatYUV.elemSize() * sizeof(uchar));
+            cv::cvtColor(m_MatYUV, outArray, CV_YUV2BGR_YUY2);
+            free(new_pixels);
+            return true;
+        }
+        return false;
+    }
+
+    int getCaptureDomain() {
+        return PSEYE_CAP_PS3EYELIBUSB;
+    }
+    
+    bool isOpened() const
+    {
+        return (m_index != -1);
+    }
+
+    std::string getUniqueIndentifier() const
+    {
+        std::string identifier = "ps3eye_";
+
+        if (isOpened())
+        {
+            char usb_port_path[128];
+
+            if (eye->getUSBPortPath(usb_port_path, sizeof(usb_port_path)))
+            {
+                identifier.append(usb_port_path);
+            }
+        }
+
+        return identifier;
+    }
+
+protected:
+    
+    bool open(int _index)
+    {
+        // Find the handle with the associated device index
+        USBDeviceManager *usbMgr= USBDeviceManager::getInstance();
+        t_usb_device_handle handle= usbMgr->getFirstUSBDeviceHandle();
+
+        for (int i= 0; i != _index && handle != k_invalid_usb_device_handle; ++i)
+        {
+            handle= usbMgr->getNextUSBDeviceHandle(handle);
+        }
+       
+        if (handle != k_invalid_usb_device_handle)
+        {            
+            eye = new PS3EyeLibUSBCapture(handle);
+            
+            if (eye != nullptr && eye->init(640, 480, 60))
+            {
+                // Change any default settings here
+                
+                eye->start();
+                
+                eye->setAutogain(false);
+                eye->setAutoWhiteBalance(false);
+                
+                m_index = _index;
+                refreshDimensions();
+                
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    void close()
+    {
+        // eye will close itself when going out of scope.
+        m_index = -1;
+    }
+    
+    void refreshDimensions()
+    {
+        m_width = eye->getWidth();
+        m_widthStep = eye->getRowBytes(); // just width * 2.
+        m_height = eye->getHeight();
+        m_size = m_widthStep * m_height;
+        m_MatYUV.create(cv::Size(m_width, m_height), CV_8UC2);
+    }
+
+    int m_index, m_width, m_height, m_widthStep;
+    size_t m_size;
+    cv::Mat m_MatYUV;
+    PS3EyeLibUSBCapture *eye;
+};
 
 static bool usingCLEyeDriver()
 {
@@ -468,7 +670,6 @@ static bool usingCLEyeDriver()
 #endif
     return cleyedriver_found;
 }
-
 
 /*
 -- Definitions for PSEyeVideoCapture --
@@ -616,8 +817,9 @@ cv::Ptr<cv::IVideoCapture> PSEyeVideoCapture::pseyeVideoCapture_create(int index
         PSEYE_CAP_CLMULTI,
         PSEYE_CAP_CLEYE,
 #endif
+        PSEYE_CAP_PS3EYELIBUSB,
 #ifdef HAVE_PS3EYE
-        PSEYE_CAP_PS3EYE,
+        PSEYE_CAP_PS3EYEDRIVER,
 #endif
         -1, -1
     };
@@ -660,8 +862,14 @@ cv::Ptr<cv::IVideoCapture> PSEyeVideoCapture::pseyeVideoCapture_create(int index
                 }
                 break;
 #endif
+            case PSEYE_CAP_PS3EYELIBUSB:
+                {
+                    capture = cv::makePtr<PSEYECaptureCAM_LibUSB>(index);
+                    m_indentifier = capture.dynamicCast<PSEYECaptureCAM_LibUSB>()->getUniqueIndentifier();
+                }
+                break;
 #ifdef HAVE_PS3EYE
-            case PSEYE_CAP_PS3EYE:
+            case PSEYE_CAP_PS3EYEDRIVER:
                 {
                     capture = cv::makePtr<PSEYECaptureCAM_PS3EYE>(index);
                     m_indentifier = capture.dynamicCast<PSEYECaptureCAM_PS3EYE>()->getUniqueIndentifier();
