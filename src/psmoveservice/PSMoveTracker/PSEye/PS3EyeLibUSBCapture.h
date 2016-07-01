@@ -53,6 +53,7 @@ public:
     inline unsigned int getRowBytes() const { return m_frame_stride; }
 
     // Get the USB Bus/Port path that this camera is connected to
+    inline t_usb_device_handle getUSBDeviceHandle() const { return m_usb_device_handle; }
     bool getUSBPortPath(char *out_identifier, size_t max_identifier_length) const;
 
     // Get a frame from the camera. Notes:

@@ -83,7 +83,6 @@
 #define VGA	 0
 #define QVGA 1
 
-
 //-- data -----
 static const uint8_t ov534_reg_initdata[][2] = {
     { 0xe7, 0x3a },
@@ -303,6 +302,10 @@ static const uint8_t sensor_start_qvga[][2] = {
 };
 
 //-- private methods -----
+static void async_init_camera(t_usb_device_handle device_handle, uint32_t width, uint32_t height, uint8_t frameRate, async::TaskCallback<int> outCallback);
+static void async_start_camera(PS3EyeLibUSBCapture *camera, async::TaskCallback<int> outCallback);
+static void async_stop_camera(PS3EyeLibUSBCapture *camera, async::TaskCallback<int> outCallback);
+
 static void async_set_autogain(t_usb_device_handle device_handle, bool bAutoGain, uint8_t gain, uint8_t exposure, async::TaskCallback<int> outCallback);
 static void async_set_auto_white_balance(t_usb_device_handle device_handle, bool bAutoWhiteBalance, async::TaskCallback<int> outCallback);
 static void async_set_gain(t_usb_device_handle handle, unsigned char val, async::TaskCallback<int> outCallback);
@@ -315,7 +318,7 @@ static void async_set_red_balance(t_usb_device_handle device_handle, unsigned ch
 static void async_set_green_balance(t_usb_device_handle device_handle, unsigned char val, async::TaskCallback<int> outCallback);
 static void async_set_blue_balance(t_usb_device_handle device_handle, unsigned char val, async::TaskCallback<int> outCallback);
 static void async_set_flip(t_usb_device_handle device_handle, bool horizontal, bool vertical, async::TaskCallback<int> outCallback);
-static uint8_t async_set_frame_rate(t_usb_device_handle device_handle, uint32_t frame_width, uint8_t frame_rate, bool dry_run, async::TaskCallback<int> outCallback);
+static void async_set_frame_rate(t_usb_device_handle device_handle, uint32_t frame_width, uint8_t frame_rate, async::TaskCallback<int> outCallback);
 
 static void async_sccb_reg_write(t_usb_device_handle device_handle, uint8_t reg, uint8_t val, async::TaskCallback<int> outCallback);
 static void async_sccb_reg_write_array(t_usb_device_handle device_handle, const uint8_t (*sequence)[2], int sequenceLength, async::TaskCallback<int> outCallback);
@@ -327,6 +330,7 @@ static void async_ov534_reg_write_array(t_usb_device_handle device_handle, const
 static void async_ov534_reg_read(t_usb_device_handle device_handle, uint16_t reg, async::TaskCallback<int> callback);
 static void async_ov534_set_led(t_usb_device_handle device_handle, bool bLedOn, async::TaskCallback<int> outCallback);
 
+static uint8_t compute_frame_rate_settings(const uint32_t frame_width, const uint8_t frame_rate, uint8_t *out_r11=nullptr, uint8_t *out_r0d=nullptr, uint8_t *out_re5=nullptr);
 static void log_usb_result_code(const char *function_name, eUSBResultCode result_code);
 
 //-- public interface -----
@@ -350,7 +354,7 @@ public:
         m_taskQueue.push_back(task);
 
         // If this is the only task, go ahead and start it because there
-        // won't be an older task compeleting to start this new one
+        // won't be an older task completing to start this new one
         if (m_taskQueue.size() == 1)
         {
             startNextTask();
@@ -420,13 +424,40 @@ PS3EyeLibUSBCapture::~PS3EyeLibUSBCapture()
     delete m_task_queue;
 }
 
-
 bool PS3EyeLibUSBCapture::init(
     unsigned int width, 
     unsigned int height,
     unsigned int desiredFrameRate)
 {
     bool bSuccess= false;
+
+    if (m_usb_device_handle != k_invalid_usb_device_handle)
+    {
+        if (!USBDeviceManager::getInstance()->openUSBDevice(m_usb_device_handle))
+        {
+            return false;
+        }
+    }
+
+    if ((width == 0 && height == 0) || width > 320 || height > 240)
+    {
+        m_frame_width = 640;
+        m_frame_height = 480;
+    }
+    else
+    {
+        m_frame_width = 320;
+        m_frame_height = 240;
+    }
+    m_frame_stride = m_frame_width * 2;
+    m_frame_rate = compute_frame_rate_settings(width, desiredFrameRate);
+
+    // Add an async task to initialize the camera
+    m_task_queue->addAsyncTask(
+        "init",
+        [this](async::TaskCallback<int> callback) {
+            async_init_camera(m_usb_device_handle, m_frame_width, m_frame_height, m_frame_rate, callback);
+    });
 
     return bSuccess;
 }
@@ -435,7 +466,7 @@ void PS3EyeLibUSBCapture::release()
 {
     if(m_usb_device_handle != k_invalid_usb_device_handle)
     {
-        //close_usb();
+        USBDeviceManager::getInstance()->closeUSBDevice(m_usb_device_handle);
     }
 
     if (m_libusb_thread_frame_buffers[0] != nullptr)
@@ -459,12 +490,30 @@ void PS3EyeLibUSBCapture::release()
 
 void PS3EyeLibUSBCapture::start()
 {
+    if (m_is_streaming) return;
 
+    // Add an async task to initialize the camera
+    m_task_queue->addAsyncTask(
+        "start",
+        [this](async::TaskCallback<int> callback) {
+            async_start_camera(this, callback);
+    });
+
+    m_is_streaming = true;
 }
 
 void PS3EyeLibUSBCapture::stop()
 {
+    if(!m_is_streaming) return;
 
+    // Add an async task to initialize the camera
+    m_task_queue->addAsyncTask(
+        "stop",
+        [this](async::TaskCallback<int> callback) {
+            async_stop_camera(this, callback);
+    });
+
+    m_is_streaming = false;
 }
 
 void PS3EyeLibUSBCapture::setAutogain(bool bAutoGain)
@@ -635,7 +684,252 @@ unsigned char* PS3EyeLibUSBCapture::getFrame()
     return m_main_thread_frame_buffer;
 }
 
+//NOTE: This function is called in the USBManager's worker thread, NOT the main thread
+static void usb_bulk_transfer_callback(unsigned char *packet_data, int packet_length, void *userdata)
+{
+}
+
 //-- private helpers ----
+static void async_init_camera(
+    t_usb_device_handle device_handle,
+    uint32_t width,
+    uint32_t height,
+    uint8_t frameRate,
+    async::TaskCallback<int> outCallback)
+{
+    uint16_t sensor_id = 0;
+
+    async::TaskVector<int> tasks{
+        // reset bridge
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, 0xe7, 0x3a, taskDoneCallback);
+        },
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, 0xe0, 0x08, taskDoneCallback);
+        },
+            [](async::TaskCallback<int> taskDoneCallback) {
+            ServerUtility::sleep_ms(10);
+            taskDoneCallback(async::OK, 0);
+        },
+            // initialize the sensor address
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, OV534_REG_ADDRESS, 0x42, taskDoneCallback);
+        },
+            // reset sensor
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_sccb_reg_write(device_handle, 0x12, 0x80, taskDoneCallback);
+        },
+            [](async::TaskCallback<int> taskDoneCallback) {
+            ServerUtility::sleep_ms(10);
+            taskDoneCallback(async::OK, 0);
+        },
+            // probe the sensor
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_sccb_reg_read(device_handle, 0x0a, taskDoneCallback);
+        },
+            [device_handle, &sensor_id](async::TaskCallback<int> taskDoneCallback) mutable {
+            async_sccb_reg_read(device_handle, 0x0a,
+                [&sensor_id, taskDoneCallback](async::ErrorCode error, int result) mutable {
+                sensor_id = result << 8;
+                taskDoneCallback(error, result);
+            });
+        },
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_sccb_reg_read(device_handle, 0x0b, taskDoneCallback);
+        },
+            [device_handle, &sensor_id](async::TaskCallback<int> taskDoneCallback) mutable {
+            async_sccb_reg_read(device_handle, 0x0b,
+                [&sensor_id, taskDoneCallback](async::ErrorCode error, int result) mutable {
+                sensor_id |= result;
+                SERVER_LOG_DEBUG("async_init_camera") << "PS3EYE Sensor ID: " << sensor_id;
+                taskDoneCallback(error, result);
+            });
+        },
+            // initialize 
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write_array(device_handle, ov534_reg_initdata, ARRAY_SIZE(ov534_reg_initdata), taskDoneCallback);
+        },
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_set_led(device_handle, true, taskDoneCallback);
+        },
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_sccb_reg_write_array(device_handle, ov772x_reg_initdata, ARRAY_SIZE(ov772x_reg_initdata), taskDoneCallback);
+        },
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_sccb_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback);
+        },
+            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_set_led(device_handle, false, taskDoneCallback);
+        }
+    };
+
+    // Evaluate tasks in order
+    // Pass outCallback the final error code and result of the task chain
+    async::series<int>(
+        tasks,
+        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+    {
+        int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
+
+        outCallback(outErrorCode, outResult);
+    });
+}
+
+static void async_start_camera(
+    PS3EyeLibUSBCapture *camera,
+    async::TaskCallback<int> outCallback)
+{
+    t_usb_device_handle device_handle = camera->getUSBDeviceHandle();
+    uint32_t frame_width = camera->getWidth();
+    uint8_t frame_rate = camera->getFrameRate();
+    bool bAutoGain = camera->getAutogain();
+    bool bAWB = camera->getAutoWhiteBalance();
+    uint8_t gain = camera->getGain();
+    uint8_t hue = camera->getHue();
+    uint8_t exposure = camera->getExposure();
+    uint8_t brightness = camera->getBrightness();
+    uint8_t contrast = camera->getContrast();
+    uint8_t sharpness = camera->getSharpness();
+    uint8_t redBalance = camera->getRedBalance();
+    uint8_t greenBalance = camera->getGreenBalance();
+    uint8_t blueBalance = camera->getBlueBalance();
+    bool bFlipH = camera->getFlipH();
+    bool bFlipV = camera->getFlipV();
+
+    async::TaskVector<int> tasks{
+        [device_handle, frame_width](async::TaskCallback<int> taskDoneCallback) {
+            if (frame_width == 320) // 320x240
+                async_ov534_reg_write_array(device_handle, bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga), taskDoneCallback);
+            else // 640x480 
+                async_ov534_reg_write_array(device_handle, bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga), taskDoneCallback);
+        },
+        [device_handle, frame_width](async::TaskCallback<int> taskDoneCallback) {
+            if (frame_width == 320) // 320x240
+                async_sccb_reg_write_array(device_handle, sensor_start_qvga, ARRAY_SIZE(sensor_start_qvga), taskDoneCallback);
+            else // 640x480
+                async_sccb_reg_write_array(device_handle, sensor_start_vga, ARRAY_SIZE(sensor_start_vga), taskDoneCallback);
+        },
+        [device_handle, frame_width, frame_rate](async::TaskCallback<int> taskDoneCallback) {
+            async_set_frame_rate(device_handle, frame_width, frame_rate, taskDoneCallback);
+        },
+        [device_handle, bAutoGain, gain, exposure](async::TaskCallback<int> taskDoneCallback) {
+            async_set_autogain(device_handle, bAutoGain, gain, exposure, taskDoneCallback);
+        },
+        [device_handle, bAWB](async::TaskCallback<int> taskDoneCallback) {
+            async_set_auto_white_balance(device_handle, bAWB, taskDoneCallback);
+        },
+        [device_handle, gain](async::TaskCallback<int> taskDoneCallback) {
+            async_set_gain(device_handle, gain, taskDoneCallback);
+        },
+        [device_handle, hue](async::TaskCallback<int> taskDoneCallback) {
+            async_set_hue(device_handle, hue, taskDoneCallback);
+        },
+        [device_handle, exposure](async::TaskCallback<int> taskDoneCallback) {
+            async_set_exposure(device_handle, exposure, taskDoneCallback);
+        },
+        [device_handle, brightness](async::TaskCallback<int> taskDoneCallback) {
+            async_set_brightness(device_handle, brightness, taskDoneCallback);
+        },
+        [device_handle, contrast](async::TaskCallback<int> taskDoneCallback) {
+            async_set_contrast(device_handle, contrast, taskDoneCallback);
+        },
+        [device_handle, sharpness](async::TaskCallback<int> taskDoneCallback) {
+            async_set_sharpness(device_handle, sharpness, taskDoneCallback);
+        },
+        [device_handle, redBalance](async::TaskCallback<int> taskDoneCallback) {
+            async_set_red_balance(device_handle, redBalance, taskDoneCallback);
+        },
+        [device_handle, blueBalance](async::TaskCallback<int> taskDoneCallback) {
+            async_set_blue_balance(device_handle, blueBalance, taskDoneCallback);
+        },
+        [device_handle, greenBalance](async::TaskCallback<int> taskDoneCallback) {
+            async_set_green_balance(device_handle, greenBalance, taskDoneCallback);
+        },
+        [device_handle, bFlipH, bFlipV](async::TaskCallback<int> taskDoneCallback) {
+            async_set_flip(device_handle, bFlipH, bFlipV, taskDoneCallback);
+        },
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_set_led(device_handle, true, taskDoneCallback);
+        },
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, 0xe0, 0x00, taskDoneCallback); // start stream
+        },
+        [device_handle, camera](async::TaskCallback<int> taskDoneCallback) {
+            USBTransferRequest request;
+            memset(&request, 0, sizeof(USBTransferRequest));
+            request.request_type= _USBRequestType_StartBulkTransfer;
+            request.payload.start_bulk_transfer.usb_device_handle= device_handle;
+            request.payload.start_bulk_transfer.bAutoResubmit= true;
+            request.payload.start_bulk_transfer.in_flight_transfer_packet_count= NUM_TRANSFERS;
+            request.payload.start_bulk_transfer.transfer_packet_size= TRANSFER_SIZE;
+            request.payload.start_bulk_transfer.on_data_callback= usb_bulk_transfer_callback;
+            request.payload.start_bulk_transfer.transfer_callback_userdata= camera;
+
+            // Send a request to the USBDeviceManager to start a bulk transfer stream for video frames
+            USBDeviceManager::getInstance()->submitTransferRequest(
+                request, 
+                [taskDoneCallback](USBTransferResult &result) {
+                    assert(result.result_type == _USBResultType_BulkTransfer);
+                    log_usb_result_code("async_start_camera", result.payload.bulk_transfer.result_code); 
+                    taskDoneCallback(async::OK, result.payload.bulk_transfer.result_code);
+                });
+        }
+    };
+
+    // Evaluate tasks in order
+    // Pass outCallback the final error code and result of the task chain
+    async::series<int>(
+        tasks,
+        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+    {
+        int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
+
+        outCallback(outErrorCode, outResult);
+    });
+}
+
+static void async_stop_camera(
+    PS3EyeLibUSBCapture *camera,
+    async::TaskCallback<int> outCallback)
+{
+    t_usb_device_handle device_handle = camera->getUSBDeviceHandle();
+
+    async::TaskVector<int> tasks{
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback); // stop stream
+        },
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_set_led(device_handle, false, taskDoneCallback);
+        },
+        [device_handle, camera](async::TaskCallback<int> taskDoneCallback) {
+            USBTransferRequest request;
+            memset(&request, 0, sizeof(USBTransferRequest));
+            request.request_type= _USBRequestType_CancelBulkTransfer;
+            request.payload.cancel_bulk_transfer.usb_device_handle= device_handle;
+
+            // Send a request to the USBDeviceManager to stop the bulk transfer stream for video frames
+            USBDeviceManager::getInstance()->submitTransferRequest(
+                request, 
+                [taskDoneCallback](USBTransferResult &result) {
+                    assert(result.result_type == _USBResultType_BulkTransfer);
+                    log_usb_result_code("async_stop_camera", result.payload.bulk_transfer.result_code);
+                    taskDoneCallback(async::OK, result.payload.bulk_transfer.result_code);
+                });
+        }
+    };
+
+    // Evaluate tasks in order
+    // Pass outCallback the final error code and result of the task chain
+    async::series<int>(
+        tasks,
+        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+    {
+        int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
+
+        outCallback(outErrorCode, outResult);
+    });
+}
+
 static void async_set_autogain(
     t_usb_device_handle device_handle, 
     bool bAutoGain, 
@@ -883,83 +1177,37 @@ static void async_set_flip(
         });
 }
 
-static uint8_t async_set_frame_rate(
+static void async_set_frame_rate(
     t_usb_device_handle device_handle, 
     uint32_t frame_width,
     uint8_t frame_rate, 
-    bool dry_run,
     async::TaskCallback<int> outCallback)
 {
-    struct rate_s {
-            uint8_t fps;
-            uint8_t r11;
-            uint8_t r0d;
-            uint8_t re5;
-    };
-    static const struct rate_s rate_0[] = { /* 640x480 */
-            {60, 0x01, 0xc1, 0x04},
-            {50, 0x01, 0x41, 0x02},
-            {40, 0x02, 0xc1, 0x04},
-            {30, 0x04, 0x81, 0x02},
-            {15, 0x03, 0x41, 0x04},
-    };
-    static const struct rate_s rate_1[] = { /* 320x240 */
-            {205, 0x01, 0xc1, 0x02}, /* 205 FPS: video is partly corrupt */
-            {187, 0x01, 0x81, 0x02}, /* 187 FPS or below: video is valid */
-            {150, 0x01, 0xc1, 0x04},
-            {137, 0x02, 0xc1, 0x02},
-            {125, 0x02, 0x81, 0x02},
-            {100, 0x02, 0xc1, 0x04},
-            {75, 0x03, 0xc1, 0x04},
-            {60, 0x04, 0xc1, 0x04},
-            {50, 0x02, 0x41, 0x04},
-            {37, 0x03, 0x41, 0x04},
-            {30, 0x04, 0x41, 0x04},
+    uint8_t r11, r0d, re5;
+    compute_frame_rate_settings(frame_width, frame_rate, &r11, &r0d, &re5);
+
+    async::TaskVector<int> tasks {
+        [device_handle, r11](async::TaskCallback<int> taskDoneCallback) {
+            async_sccb_reg_write(device_handle, 0x11, r11, taskDoneCallback);
+        },
+        [device_handle, r0d](async::TaskCallback<int> taskDoneCallback) {
+            async_sccb_reg_write(device_handle, 0x0d, r0d, taskDoneCallback);
+        },
+        [device_handle, re5](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, 0xe5, re5, taskDoneCallback);
+        }
     };
 
-    int rate_index;
-    const struct rate_s *rate= nullptr;
+    // Evaluate tasks in order
+    // Pass outCallback the final error code and result of the task chain
+    async::series<int>(
+        tasks, 
+        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        {
+            int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
-    if (frame_width == 640) {
-            rate = rate_0;
-            rate_index = ARRAY_SIZE(rate_0);
-    } else {
-            rate = rate_1;
-            rate_index = ARRAY_SIZE(rate_1);
-    }
-    while (--rate_index > 0) {
-            if (frame_rate >= rate->fps)
-                    break;
-            rate++;
-    }
-
-    if (!dry_run)
-    {
-        async::TaskVector<int> tasks {
-            [device_handle, rate](async::TaskCallback<int> taskDoneCallback) {
-                async_sccb_reg_write(device_handle, 0x11, rate->r11, taskDoneCallback);
-            },
-            [device_handle, rate](async::TaskCallback<int> taskDoneCallback) {
-                async_sccb_reg_write(device_handle, 0x0d, rate->r0d, taskDoneCallback);
-            },
-            [device_handle, rate](async::TaskCallback<int> taskDoneCallback) {
-                async_ov534_reg_write(device_handle, 0xe5, rate->re5, taskDoneCallback);
-            }
-        };
-
-        // Evaluate tasks in order
-        // Pass outCallback the final error code and result of the task chain
-        async::series<int>(
-            tasks, 
-            [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
-            {
-                int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
-
-                outCallback(outErrorCode, outResult);
-            });
-    }
-
-    return rate->fps;
+            outCallback(outErrorCode, outResult);
+        });
 }
 
 static void async_sccb_reg_write(
@@ -1360,6 +1608,75 @@ static void async_ov534_set_led(
 
             outCallback(outErrorCode, outResult);
         });
+}
+
+static uint8_t compute_frame_rate_settings(
+    const uint32_t frame_width,
+    const uint8_t desired_frame_rate,
+    uint8_t *out_r11,
+    uint8_t *out_r0d,
+    uint8_t *out_re5)
+{
+    struct rate_s {
+        uint8_t fps;
+        uint8_t r11;
+        uint8_t r0d;
+        uint8_t re5;
+    };
+    static const struct rate_s rate_0[] = { /* 640x480 */
+        { 60, 0x01, 0xc1, 0x04 },
+        { 50, 0x01, 0x41, 0x02 },
+        { 40, 0x02, 0xc1, 0x04 },
+        { 30, 0x04, 0x81, 0x02 },
+        { 15, 0x03, 0x41, 0x04 },
+    };
+    static const struct rate_s rate_1[] = { /* 320x240 */
+        { 205, 0x01, 0xc1, 0x02 }, /* 205 FPS: video is partly corrupt */
+        { 187, 0x01, 0x81, 0x02 }, /* 187 FPS or below: video is valid */
+        { 150, 0x01, 0xc1, 0x04 },
+        { 137, 0x02, 0xc1, 0x02 },
+        { 125, 0x02, 0x81, 0x02 },
+        { 100, 0x02, 0xc1, 0x04 },
+        { 75, 0x03, 0xc1, 0x04 },
+        { 60, 0x04, 0xc1, 0x04 },
+        { 50, 0x02, 0x41, 0x04 },
+        { 37, 0x03, 0x41, 0x04 },
+        { 30, 0x04, 0x41, 0x04 },
+    };
+
+    int rate_index;
+    const struct rate_s *rate = nullptr;
+
+    if (frame_width == 640) {
+        rate = rate_0;
+        rate_index = ARRAY_SIZE(rate_0);
+    }
+    else {
+        rate = rate_1;
+        rate_index = ARRAY_SIZE(rate_1);
+    }
+    while (--rate_index > 0) {
+        if (desired_frame_rate >= rate->fps)
+            break;
+        rate++;
+    }
+
+    if (out_r11 != nullptr)
+    {
+        *out_r11 = rate->r11;
+    }
+
+    if (out_r0d != nullptr)
+    {
+        *out_r0d = rate->r0d;
+    }
+
+    if (out_re5 != nullptr)
+    {
+        *out_re5 = rate->re5;
+    }
+
+    return rate->fps;
 }
 
 static void log_usb_result_code(const char *function_name, eUSBResultCode result_code)
