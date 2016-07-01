@@ -56,6 +56,8 @@
 #include "ServerUtility.h"
 #include "USBDeviceManager.h"
 
+#include <algorithm>
+#include <atomic>
 #include <iomanip>
 #include <string>
 #include <deque>
@@ -150,6 +152,14 @@ enum libusb_request_recipient {
     typedef unsigned __int32  uint32_t;
 #else
     #include <stdint.h>
+#endif
+
+//-- macros -----
+//#define DEBUG_PS3EYE
+#if defined(DEBUG_PS3EYE)
+#define debug(...) fprintf(stdout, __VA_ARGS__)
+#else
+#define debug(...) 
 #endif
 
 //-- data -----
@@ -458,19 +468,24 @@ public:
 };
 
 //-- PS3EyeVideoPacketProcessor -----
+/// Decodes incoming "USB Video Class" (UVC) packets from the USBDeviceManager worker thread
+/// and 
 class PS3EyeVideoPacketProcessor
 {
 public:
     PS3EyeVideoPacketProcessor()
-        : last_packet_type(DISCARD_PACKET)
-        , last_pts(0)
-        , last_fid(0)
-        , cur_frame_start(nullptr)
-        , cur_frame_data_len(0)
+        : m_last_packet_type(DISCARD_PACKET)
+        , m_lastPresentationTimestamp(0)
+        , m_lastFieldID(0)
+        , m_currentFrameStart(nullptr)
+        , m_currentFrameBytesWritten(0)
+        , m_frameCounter({0})
+        , m_frameTotalSizeBytes(0)
+        , m_frameCounter_mainThread(0)
     {
-        m_libusb_thread_frame_buffers[0] = nullptr;
-        m_libusb_thread_frame_buffers[1] = nullptr;
-        m_main_thread_frame_buffer= nullptr;
+        m_frameBuffers[0] = nullptr;
+        m_frameBuffers[1] = nullptr;
+        m_frameBuffer_mainThread= nullptr;
     }
 
     virtual ~PS3EyeVideoPacketProcessor()
@@ -478,30 +493,39 @@ public:
         release_mainThread();
     }
 
-    void release_mainThread()
+    void setFrameSize_mainThread(uint32_t frame_size)
     {
-        if (m_libusb_thread_frame_buffers[0] != nullptr)
-        {
-            delete[] m_libusb_thread_frame_buffers[0];
-            m_libusb_thread_frame_buffers[0]= nullptr;
-        } 
-
-        if (m_libusb_thread_frame_buffers[1] != nullptr)
-        {
-            delete[] m_libusb_thread_frame_buffers[1];
-            m_libusb_thread_frame_buffers[1]= nullptr;
-        } 
-
-        if (m_main_thread_frame_buffer != nullptr)
-        {
-            delete[] m_main_thread_frame_buffer;
-            m_main_thread_frame_buffer= nullptr;
-        }
+        m_frameTotalSizeBytes= frame_size;
+        reallocate_mainThread();
     }
 
-    inline const uint8_t *getFrameBuffer_mainThread() const
+    const uint8_t *getFrameBuffer_mainThread()
     {
-        return m_main_thread_frame_buffer;
+        const int k_max_refetch_attempts= 2;
+        int fetchAttempt= 0;
+
+        // Pull data from the worker thread if it changed
+        int worker_thread_frame_counter= static_cast<int>(m_frameCounter);
+        while (worker_thread_frame_counter != m_frameCounter_mainThread && fetchAttempt < k_max_refetch_attempts)
+        {
+            // The frame being written to is indexed by the frame counter.
+            // That means the completed frame we want to read is the other frame index.
+            int read_frame_index= (worker_thread_frame_counter + 1) % 2;
+
+            // Copy the completed frame from the worker thread
+            memcpy(m_frameBuffer_mainThread, m_frameBuffers[read_frame_index], m_frameTotalSizeBytes);
+
+            // Update the frame counter for the main thread
+            m_frameCounter_mainThread= worker_thread_frame_counter;
+
+            // Pull the frame counter from the worker thread again,
+            // in case it changed while we were in the middle of copying the buffer
+            worker_thread_frame_counter= static_cast<int>(m_frameCounter);
+
+            ++fetchAttempt;
+        }
+
+        return m_frameBuffer_mainThread;
     }
 
     static void usbBulkTransferCallback_workerThread(unsigned char *packet_data, int packet_length, void *userdata)
@@ -512,139 +536,206 @@ public:
     }
 
 protected:
+    void reallocate_mainThread()
+    {
+        release_mainThread();
+
+        if (m_frameTotalSizeBytes > 0)
+        {
+            m_frameBuffers[0] = new uint8_t[m_frameTotalSizeBytes];
+            m_frameBuffers[1] = new uint8_t[m_frameTotalSizeBytes];
+            m_frameBuffer_mainThread= new uint8_t[m_frameTotalSizeBytes];
+
+            memset(m_frameBuffers[0], 0, m_frameTotalSizeBytes);
+            memset(m_frameBuffers[1], 0, m_frameTotalSizeBytes);
+            memset(m_frameBuffer_mainThread, 0, m_frameTotalSizeBytes);
+        }
+
+        // Point the write pointer at the first buffer
+        m_frameCounter= 0;
+        m_frameCounter_mainThread= 0;
+        m_currentFrameStart= m_frameBuffers[0];
+    }
+
+    void release_mainThread()
+    {
+        if (m_frameBuffers[0] != nullptr)
+        {
+            delete[] m_frameBuffers[0];
+            m_frameBuffers[0]= nullptr;
+        } 
+
+        if (m_frameBuffers[1] != nullptr)
+        {
+            delete[] m_frameBuffers[1];
+            m_frameBuffers[1]= nullptr;
+        } 
+
+        if (m_frameBuffer_mainThread != nullptr)
+        {
+            delete[] m_frameBuffer_mainThread;
+            m_frameBuffer_mainThread= nullptr;
+        }
+    }
+
     void packetScan_workerThread(unsigned char *data, int len)
     {
-        #if 0
-        uint32_t this_pts;
-        uint16_t this_fid;
+        uint32_t presentationTimeStamp; // a.k.a. "PTS"
+        uint16_t fieldID; // a.k.a. "FID"
         int remaining_len = len;
         int payload_len;
 
         payload_len = 2048; // bulk type
         do {
-            len = (std::min)(remaining_len, payload_len);
+            len = std::min(remaining_len, payload_len);
 
-            /* Payloads are prefixed with a UVC-style header.  We
-                consider a frame to start when the FID toggles, or the PTS
-                changes.  A frame ends when EOF is set, and we've received
-                the correct number of bytes. */
+            // Payloads are prefixed with a "USB Video Class" (UVC) style header. 
+            // We consider a frame to start when the "Field ID Bit" (FID) toggles 
+            // or the "Presentation Time Stamp" (PTS) changes.
+            // A frame ends when EOF is set, and we've received
+            // the correct number of bytes.
 
-            /* Verify UVC header.  Header length is always 12 */
-            if (data[0] != 12 || len < 12) {
+            // Verify UVC header.  Header length is always 12 
+            if (data[0] != 12 || len < 12) 
+            {
                 debug("bad header\n");
                 goto discard;
             }
 
-            /* Check errors */
-            if (data[1] & UVC_STREAM_ERR) {
+            // Check errors
+            if (data[1] & UVC_STREAM_ERR) 
+            {
                 debug("payload error\n");
                 goto discard;
             }
 
-            /* Extract PTS and FID */
-            if (!(data[1] & UVC_STREAM_PTS)) {
+            // Extract PTS and FID
+            if (!(data[1] & UVC_STREAM_PTS))
+            {
                 debug("PTS not present\n");
                 goto discard;
             }
 
-            this_pts = (data[5] << 24) | (data[4] << 16) | (data[3] << 8) | data[2];
-            this_fid = (data[1] & UVC_STREAM_FID) ? 1 : 0;
+            presentationTimeStamp = (data[5] << 24) | (data[4] << 16) | (data[3] << 8) | data[2];
+            fieldID = (data[1] & UVC_STREAM_FID) ? 1 : 0;
 
-            /* If PTS or FID has changed, start a new frame. */
-            if (this_pts != last_pts || this_fid != last_fid) {
-                if (last_packet_type == INTER_PACKET)
+            // If PTS or FID has changed, start a new frame.
+            if (presentationTimeStamp != m_lastPresentationTimestamp || fieldID != m_lastFieldID) 
+            {
+                if (m_last_packet_type == INTER_PACKET)
                 {
-                    /* The last frame was incomplete, so don't keep it or we will glitch */
-                    frame_add(DISCARD_PACKET, NULL, 0);
+                    // The last frame was incomplete, so don't keep it or we will glitch
+                    frameAddData_workerThread(DISCARD_PACKET, NULL, 0);
                 }
-                last_pts = this_pts;
-                last_fid = this_fid;
-                frame_add(FIRST_PACKET, data + 12, len - 12);
-            } /* If this packet is marked as EOF, end the frame */
+
+                m_lastPresentationTimestamp = presentationTimeStamp;
+                m_lastFieldID = fieldID;
+                frameAddData_workerThread(FIRST_PACKET, data + 12, len - 12);
+            } 
+            // If this packet is marked as EOF, end the frame
             else if (data[1] & UVC_STREAM_EOF) 
             {
-                last_pts = 0;
-                if(cur_frame_data_len + len - 12 != frame_size)
+                m_lastPresentationTimestamp = 0;
+                if(m_currentFrameBytesWritten + len - 12 != m_frameTotalSizeBytes)
                 {
                     goto discard;
                 }
-                frame_add(LAST_PACKET, data + 12, len - 12);
-            } else {
-                /* Add the data from this payload */
-                frame_add(INTER_PACKET, data + 12, len - 12);
+                frameAddData_workerThread(LAST_PACKET, data + 12, len - 12);
+            }
+            else 
+            {
+                // Add the data from this payload
+                frameAddData_workerThread(INTER_PACKET, data + 12, len - 12);
             }
 
 
-            /* Done this payload */
+            // Done this payload
             goto scan_next;
 
         discard:
-            /* Discard data until a new frame starts. */
-            frame_add(DISCARD_PACKET, NULL, 0);
+            // Discard data until a new frame starts.
+            frameAddData_workerThread(DISCARD_PACKET, NULL, 0);
+
         scan_next:
             remaining_len -= len;
             data += len;
         } while (remaining_len > 0);
-        #endif // 0
     }
 
-    void frameAdd_workerThread(enum gspca_packet_type packet_type, const uint8_t *data, int len)
+    void frameAddData_workerThread(enum gspca_packet_type packet_type, const uint8_t *data, int len)
     {
-        #if 0
         if (packet_type == FIRST_PACKET) 
         {
-            cur_frame_data_len = 0;
+            m_currentFrameBytesWritten = 0;
         } 
         else
         {
-            switch(last_packet_type)  // ignore warning.
+            switch(m_last_packet_type)  // ignore warning.
             {
-                case DISCARD_PACKET:
-                    if (packet_type == LAST_PACKET) {
-                        last_packet_type = packet_type;
-                        cur_frame_data_len = 0;
-                    }
-                    return;
-                case LAST_PACKET:
-                    return;
-                default:
-                    break;
+            case DISCARD_PACKET:
+                if (packet_type == LAST_PACKET) 
+                {
+                    m_last_packet_type = packet_type;
+                    m_currentFrameBytesWritten = 0;
+                }
+                return;
+            case LAST_PACKET:
+                return;
+            default:
+                break;
             }
         }
 
         /* append the packet to the frame buffer */
         if (len > 0)
         {
-            if(cur_frame_data_len + len > frame_size)
+            if(m_currentFrameBytesWritten + len > m_frameTotalSizeBytes)
             {
                 packet_type = DISCARD_PACKET;
-                cur_frame_data_len = 0;
-            } else {
-                memcpy(cur_frame_start+cur_frame_data_len, data, len);
-                cur_frame_data_len += len;
+                m_currentFrameBytesWritten = 0;
+            }
+            else
+            {
+                memcpy(m_currentFrameStart+m_currentFrameBytesWritten, data, len);
+                m_currentFrameBytesWritten += len;
             }
         }
 
-        last_packet_type = packet_type;
+        m_last_packet_type = packet_type;
 
-        if (packet_type == LAST_PACKET) {        
-            cur_frame_data_len = 0;
-            cur_frame_start = frame_queue->Enqueue();
-            //debug("frame completed %d\n", frame_complete_ind);
+        if (packet_type == LAST_PACKET)
+        {
+            m_currentFrameBytesWritten = 0;
+            m_currentFrameStart = frameAdvance_workerThread();
         }
-        #endif // 0
+    }
+
+    uint8_t* frameAdvance_workerThread()
+    {
+        // Atomically increment the write frame counter.
+        // The main thread checks this to see if a new frame has been posted.
+        m_frameCounter++;
+
+        // Return the write pointer to the start of the appropriate buffer
+        return m_frameBuffers[static_cast<int>(m_frameCounter) % 2];
     }
 
 private:
-    enum gspca_packet_type last_packet_type;
-    uint32_t last_pts;
-    uint16_t last_fid;
+    // Worker Thread Data
+    enum gspca_packet_type m_last_packet_type;
+    uint32_t m_lastPresentationTimestamp;
+    uint16_t m_lastFieldID;
+    uint8_t* m_currentFrameStart;
+    uint32_t m_currentFrameBytesWritten;
 
-    uint8_t* cur_frame_start;
-    uint32_t cur_frame_data_len;
+    // Shared Data
+    uint8_t *m_frameBuffers[2];
+    std::atomic_int m_frameCounter;
+    uint32_t m_frameTotalSizeBytes;
 
-    unsigned char *m_libusb_thread_frame_buffers[2];
-    unsigned char *m_main_thread_frame_buffer;
+    // Main Thread Data
+    uint8_t *m_frameBuffer_mainThread;
+    int m_frameCounter_mainThread;
 };
 
 //-- PS3EyeLibUSBCapture -----
@@ -708,8 +799,11 @@ bool PS3EyeLibUSBCapture::init(
         m_frame_width = 320;
         m_frame_height = 240;
     }
-    m_frame_stride = m_frame_width * 2;
+    m_frame_stride = m_frame_width * 2; //(YUV Format = 2bytes per pixel)
     m_frame_rate = compute_frame_rate_settings(width, desiredFrameRate);
+
+    // Allocate the video frame buffers 
+    m_video_packet_processor->setFrameSize_mainThread(m_frame_stride*m_frame_height);
 
     // Add an async task to initialize the camera
     m_task_queue->addAsyncTask(
@@ -926,7 +1020,7 @@ bool PS3EyeLibUSBCapture::getUSBPortPath(char *out_identifier, size_t max_identi
     return USBDeviceManager::getInstance()->getUSBDevicePath(m_usb_device_handle, out_identifier, max_identifier_length);   
 }
 
-const unsigned char* PS3EyeLibUSBCapture::getFrame() const
+const unsigned char* PS3EyeLibUSBCapture::getFrame()
 {
     return m_video_packet_processor->getFrameBuffer_mainThread();
 }

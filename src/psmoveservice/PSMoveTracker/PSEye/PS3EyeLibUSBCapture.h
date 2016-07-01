@@ -58,7 +58,7 @@ public:
 
     // Returns a pointer to the last frame copied from the bulk transfer worker thread
     inline class PS3EyeVideoPacketProcessor* getVideoPacketProcessor() { return m_video_packet_processor; }
-    const unsigned char* getFrame() const;
+    const unsigned char* getFrame();
 
 private:
     PS3EyeLibUSBCapture(const PS3EyeLibUSBCapture&);
