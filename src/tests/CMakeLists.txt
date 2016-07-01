@@ -81,6 +81,11 @@ SET(TEST_CAMERA_SRC)
 SET(TEST_CAMERA_INCL_DIRS)
 SET(TEST_CAMERA_REQ_LIBS)
 
+# Boost dependencies for logging :(
+FIND_PACKAGE(Boost REQUIRED QUIET COMPONENTS chrono date_time filesystem log log_setup program_options system thread)
+list(APPEND TEST_CAMERA_INCL_DIRS ${Boost_INCLUDE_DIRS})
+list(APPEND TEST_CAMERA_REQ_LIBS ${Boost_LIBRARIES})
+
 # OpenCV
 set(OpenCV_STATIC ON)
 FIND_PACKAGE(OpenCV REQUIRED)
@@ -147,8 +152,13 @@ list(APPEND TEST_CAMERA_INCL_DIRS ${ROOT_DIR}/thirdparty/asyncpp/)
 # USB Device Management    
 list(APPEND TEST_CAMERA_INCL_DIRS 
     ${ROOT_DIR}/src/psmoveservice/Device/Manager
-    ${ROOT_DIR}/src/psmoveservice/Device/USB)
+    ${ROOT_DIR}/src/psmoveservice/Device/USB
+    ${ROOT_DIR}/src/psmoveservice/Server)
 list(APPEND TEST_CAMERA_SRC
+    ${ROOT_DIR}/src/psmoveservice/Server/ServerLog.h
+    ${ROOT_DIR}/src/psmoveservice/Server/ServerLog.cpp
+    ${ROOT_DIR}/src/psmoveservice/Server/ServerUtility.h
+    ${ROOT_DIR}/src/psmoveservice/Server/ServerUtility.cpp    
     ${ROOT_DIR}/src/psmoveservice/Device/Manager/USBDeviceManager.h
     ${ROOT_DIR}/src/psmoveservice/Device/Manager/USBDeviceManager.cpp
     ${ROOT_DIR}/src/psmoveservice/Device/USB/USBDeviceInfo.h
