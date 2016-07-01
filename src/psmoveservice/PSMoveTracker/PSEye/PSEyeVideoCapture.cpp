@@ -552,13 +552,12 @@ public:
 
     bool retrieveFrame(int outputType, cv::OutputArray outArray)
     {
-        uint8_t *new_pixels = eye->getFrame();
+        const uint8_t *new_pixels = eye->getFrame();
 
         if (new_pixels != NULL)
         {
             std::memcpy(m_MatYUV.data, new_pixels, m_MatYUV.total() * m_MatYUV.elemSize() * sizeof(uchar));
             cv::cvtColor(m_MatYUV, outArray, CV_YUV2BGR_YUY2);
-            free(new_pixels);
             return true;
         }
         return false;

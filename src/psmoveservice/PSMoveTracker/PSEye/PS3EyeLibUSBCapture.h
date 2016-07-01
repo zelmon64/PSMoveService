@@ -56,10 +56,9 @@ public:
     inline t_usb_device_handle getUSBDeviceHandle() const { return m_usb_device_handle; }
     bool getUSBPortPath(char *out_identifier, size_t max_identifier_length) const;
 
-    // Get a frame from the camera. Notes:
-    // - If there is no frame available, this function will block until one is
-    // - The returned frame is a malloc'd copy; you must free() it yourself when done with it
-    unsigned char* getFrame();
+    // Returns a pointer to the last frame copied from the bulk transfer worker thread
+    inline class PS3EyeVideoPacketProcessor* getVideoPacketProcessor() { return m_video_packet_processor; }
+    const unsigned char* getFrame() const;
 
 private:
     PS3EyeLibUSBCapture(const PS3EyeLibUSBCapture&);
@@ -92,8 +91,7 @@ private:
 
     // usb stuff
     t_usb_device_handle m_usb_device_handle;
-    unsigned char *m_libusb_thread_frame_buffers[2];
-    unsigned char *m_main_thread_frame_buffer;
+    class PS3EyeVideoPacketProcessor *m_video_packet_processor;
     class USBAsyncTaskQueue *m_task_queue;
 };
 
