@@ -4,9 +4,6 @@
 //-- includes -----
 #include "USBDeviceInfo.h"
 
-#include <string>
-#include "async/async.hpp"
-
 //-- definitions -----
 class PS3EyeLibUSBCapture
 {
@@ -20,18 +17,18 @@ public:
 
     // Camera Control Setters
     // Used in when we don't care about an async task result
-    void setAutogain(bool val, async::TaskCallback<int> outCallback);
-    void setAutoWhiteBalance(bool val, async::TaskCallback<int> outCallback);
-    void setGain(unsigned char val, async::TaskCallback<int> outCallback);
-    void setExposure(unsigned char val, async::TaskCallback<int> outCallback);
-    void setSharpness(unsigned char val, async::TaskCallback<int> outCallback);
-    void setContrast(unsigned char val, async::TaskCallback<int> outCallback);
-    void setBrightness(unsigned char val, async::TaskCallback<int> outCallback);
-    void setHue(unsigned char val, async::TaskCallback<int> outCallback);
-    void setRedBalance(unsigned char val, async::TaskCallback<int> outCallback);
-    void setGreenBalance(unsigned char val, async::TaskCallback<int> outCallback);
-    void setBlueBalance(unsigned char val, async::TaskCallback<int> outCallback);
-    void setFlip(bool horizontal, bool vertical, async::TaskCallback<int> outCallback);
+    void setAutogain(bool val);
+    void setAutoWhiteBalance(bool val);
+    void setGain(unsigned char val);
+    void setExposure(unsigned char val);
+    void setSharpness(unsigned char val);
+    void setContrast(unsigned char val);
+    void setBrightness(unsigned char val);
+    void setHue(unsigned char val);
+    void setRedBalance(unsigned char val);
+    void setGreenBalance(unsigned char val);
+    void setBlueBalance(unsigned char val);
+    void setFlip(bool horizontal, bool vertical);
 
     // Camera Control Accessors
     inline bool getAutogain() const { return m_autogain; }
@@ -96,6 +93,7 @@ private:
     t_usb_device_handle m_usb_device_handle;
     unsigned char *m_libusb_thread_frame_buffers[2];
     unsigned char *m_main_thread_frame_buffer;
+    class USBAsyncTaskQueue *m_task_queue;
 };
 
 #endif
