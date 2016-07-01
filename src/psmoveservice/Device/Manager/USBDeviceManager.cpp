@@ -111,25 +111,32 @@ public:
         {
             LibUSBDeviceState *state= get_libusb_state_from_handle(handle);
 
-            int res = libusb_open(state->device, &state->device_handle);
-            if (res == 0)
+            if (state != nullptr)
             {
-                res = libusb_claim_interface(state->device_handle, 0);
+                int res = libusb_open(state->device, &state->device_handle);
                 if (res == 0)
                 {
-                    state->is_interface_claimed= true;
-                    bOpened= true;
+                    res = libusb_claim_interface(state->device_handle, 0);
+                    if (res == 0)
+                    {
+                        state->is_interface_claimed = true;
+                        bOpened = true;
 
-                    SERVER_LOG_INFO("USBAsyncRequestManager::openUSBDevice") << "Successfully opened device " << handle;
+                        SERVER_LOG_INFO("USBAsyncRequestManager::openUSBDevice") << "Successfully opened device " << handle;
+                    }
+                    else
+                    {
+                        SERVER_LOG_ERROR("USBAsyncRequestManager::openUSBDevice") << "Failed to claim USB device: " << res;
+                    }
                 }
                 else
                 {
-                    SERVER_LOG_ERROR("USBAsyncRequestManager::openUSBDevice") << "Failed to claim USB device: " << res;
+                    SERVER_LOG_ERROR("USBAsyncRequestManager::openUSBDevice") << "Failed to open USB device: " << res;
                 }
             }
             else
             {
-                SERVER_LOG_ERROR("USBAsyncRequestManager::openUSBDevice") << "Failed to open USB device: " << res;
+                SERVER_LOG_ERROR("USBAsyncRequestManager::openUSBDevice") << "Invalid device handle: " << handle;
             }
 
             if (!bOpened)
