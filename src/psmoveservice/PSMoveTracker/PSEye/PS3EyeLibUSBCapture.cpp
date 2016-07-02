@@ -382,8 +382,8 @@ static const uint8_t sensor_start_qvga[][2] = {
 
 //-- private methods -----
 static void async_init_camera(t_usb_device_handle device_handle, uint32_t width, uint32_t height, uint8_t frameRate, async::TaskCallback<int> outCallback);
-static void async_start_camera(PS3EyeLibUSBCapture *camera, async::TaskCallback<int> outCallback);
-static void async_stop_camera(PS3EyeLibUSBCapture *camera, async::TaskCallback<int> outCallback);
+static void async_start_camera(const t_usb_device_handle device_handle, const PS3EyeProperties &properties, class PS3EyeVideoPacketProcessor* processor, async::TaskCallback<int> outCallback);
+static void async_stop_camera(const t_usb_device_handle device_handle, async::TaskCallback<int> outCallback);
 
 static void async_set_autogain(t_usb_device_handle device_handle, bool bAutoGain, uint8_t gain, uint8_t exposure, async::TaskCallback<int> outCallback);
 static void async_set_auto_white_balance(t_usb_device_handle device_handle, bool bAutoWhiteBalance, async::TaskCallback<int> outCallback);
@@ -445,21 +445,26 @@ public:
     {
         if (m_taskQueue.size() > 0)
         {
-            // Pop the next task in the list
-            USBAsyncTask &task= m_taskQueue.front();
-            m_taskQueue.pop_front();
+            // Get the next task in the list
+            USBAsyncTask task= m_taskQueue.front();
 
-            async::TaskCallback<int> onTaskCompleted = [this, task](async::ErrorCode error, int result) {
-                if (error == async::FAIL)
-                {
-                    SERVER_LOG_ERROR("PSEYECaptureCAM_LibUSB::startNextTask") 
-                        << "Camera Async Task(" << task.task_name 
-                        << ") failed with code: " << result;
-                }
+            // Once the task completes, start the next task (if any).
+            // NOTE: The [&] capture on this lambda means it gets a reference to 
+            // this objects task queue that it can use remove the task from the queue.
+            async::TaskCallback<int> onTaskCompleted = 
+                [&](async::ErrorCode error, int result) {
+                    if (error == async::FAIL)
+                    {
+                        SERVER_LOG_ERROR("PSEYECaptureCAM_LibUSB::startNextTask") 
+                            << "Camera Async Task(" << task.task_name 
+                            << ") failed with code: " << result;
+                    }
 
-                startNextTask();
-            };
+                    m_taskQueue.pop_front();
+                    startNextTask();
+                };
 
+            // Start the next task
             task.task_func(onTaskCompleted);
         }
     }
@@ -739,25 +744,30 @@ private:
 };
 
 //-- PS3EyeLibUSBCapture -----
+PS3EyeProperties::PS3EyeProperties()
+    : autogain(false)
+    , gain(20)
+    , exposure(120)
+    , sharpness(0)
+    , hue(143)
+    , awb(false)
+    , brightness(20)
+    , contrast(37)
+    , blueBalance(128)
+    , redBalance(128)
+    , greenBalance(128)
+    , flip_h(false)
+    , flip_v(false)
+    , frame_width(0)
+    , frame_height(0)
+    , frame_stride(0)
+    , frame_rate(0)
+{
+}
+
 PS3EyeLibUSBCapture::PS3EyeLibUSBCapture(t_usb_device_handle usb_device_handle)
-    : m_autogain(false)
-    , m_gain(20)
-    , m_exposure(120)
-    , m_sharpness(0)
-    , m_hue(143)
-    , m_awb(false)
-    , m_brightness(20)
-    , m_contrast(37)
-    , m_blueBalance(128)
-    , m_redBalance(128)
-    , m_greenBalance(128)
-    , m_flip_h(false)
-    , m_flip_v(false)
+    : m_properties()
     , m_is_streaming(false)
-    , m_frame_width(0)
-    , m_frame_height(0)
-    , m_frame_stride(0)
-    , m_frame_rate(0)
     , m_last_qued_frame_time(0.0)
     , m_usb_device_handle(usb_device_handle)
     , m_video_packet_processor(new PS3EyeVideoPacketProcessor())
@@ -779,8 +789,6 @@ bool PS3EyeLibUSBCapture::init(
     unsigned int height,
     unsigned int desiredFrameRate)
 {
-    bool bSuccess= false;
-
     if (m_usb_device_handle != k_invalid_usb_device_handle)
     {
         if (!USBDeviceManager::getInstance()->openUSBDevice(m_usb_device_handle))
@@ -791,28 +799,35 @@ bool PS3EyeLibUSBCapture::init(
 
     if ((width == 0 && height == 0) || width > 320 || height > 240)
     {
-        m_frame_width = 640;
-        m_frame_height = 480;
+        m_properties.frame_width = 640;
+        m_properties.frame_height = 480;
     }
     else
     {
-        m_frame_width = 320;
-        m_frame_height = 240;
+        m_properties.frame_width = 320;
+        m_properties.frame_height = 240;
     }
-    m_frame_stride = m_frame_width * 2; //(YUV Format = 2bytes per pixel)
-    m_frame_rate = compute_frame_rate_settings(width, desiredFrameRate);
+    m_properties.frame_stride = m_properties.frame_width * 2; //(YUV Format = 2bytes per pixel)
+    m_properties.frame_rate = compute_frame_rate_settings(width, desiredFrameRate);
 
     // Allocate the video frame buffers 
-    m_video_packet_processor->setFrameSize_mainThread(m_frame_stride*m_frame_height);
+    m_video_packet_processor->setFrameSize_mainThread(m_properties.frame_stride*m_properties.frame_height);
 
     // Add an async task to initialize the camera
-    m_task_queue->addAsyncTask(
-        "init",
-        [this](async::TaskCallback<int> callback) {
-            async_init_camera(m_usb_device_handle, m_frame_width, m_frame_height, m_frame_rate, callback);
-    });
+    {
+        const t_usb_device_handle handle= m_usb_device_handle;
+        const unsigned int width= m_properties.frame_width;
+        const unsigned int height= m_properties.frame_height;
+        const unsigned char fps= m_properties.frame_rate;
 
-    return bSuccess;
+        m_task_queue->addAsyncTask(
+            "init",
+            [handle, width, height, fps](async::TaskCallback<int> callback) {
+                async_init_camera(handle, width, height, fps, callback);
+        });
+    }
+
+    return true;
 }
 
 void PS3EyeLibUSBCapture::release()
@@ -833,11 +848,15 @@ void PS3EyeLibUSBCapture::start()
 {
     if (m_is_streaming) return;
 
+    const t_usb_device_handle device_handle= m_usb_device_handle;
+    const PS3EyeProperties &properties= m_properties;
+    PS3EyeVideoPacketProcessor* processor= m_video_packet_processor;
+    
     // Add an async task to initialize the camera
     m_task_queue->addAsyncTask(
         "start",
-        [this](async::TaskCallback<int> callback) {
-            async_start_camera(this, callback);
+        [device_handle, properties, processor](async::TaskCallback<int> callback) {
+            async_start_camera(device_handle, properties, processor, callback);
     });
 
     m_is_streaming = true;
@@ -847,11 +866,13 @@ void PS3EyeLibUSBCapture::stop()
 {
     if(!m_is_streaming) return;
 
+    const t_usb_device_handle device_handle= m_usb_device_handle;
+
     // Add an async task to initialize the camera
     m_task_queue->addAsyncTask(
         "stop",
-        [this](async::TaskCallback<int> callback) {
-            async_stop_camera(this, callback);
+        [device_handle](async::TaskCallback<int> callback) {
+            async_stop_camera(device_handle, callback);
     });
 
     m_is_streaming = false;
@@ -859,165 +880,191 @@ void PS3EyeLibUSBCapture::stop()
 
 void PS3EyeLibUSBCapture::setAutogain(bool bAutoGain)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+    const int currentGain= m_properties.gain;
+    const int currentExposure= m_properties.exposure;
+
     // Cache the new auto-gain flag (the camera will converge to this)
-    m_autogain = bAutoGain;
+    m_properties.autogain = bAutoGain;
 
     // Add an async task to set the autogain on the camera
     m_task_queue->addAsyncTask(
         "setAutogain", 
-        [this, bAutoGain](async::TaskCallback<int> callback) {
-            async_set_autogain(m_usb_device_handle, bAutoGain, m_gain, m_exposure, callback);
+        [handle, bAutoGain, currentGain, currentExposure](async::TaskCallback<int> callback) {
+            async_set_autogain(handle, bAutoGain, currentGain, currentExposure, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setAutoWhiteBalance(bool val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new AWB value (the camera will converge to this)
-    m_awb = val;
+    m_properties.awb = val;
 
     // Add an async task to set the awb on the camera
     m_task_queue->addAsyncTask(
         "setAutoWhiteBalance", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_auto_white_balance(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_auto_white_balance(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setGain(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new gain value (the camera will converge to this)
-    m_gain = val;
+    m_properties.gain = val;
 
     // Add an async task to set the gain on the camera
     m_task_queue->addAsyncTask(
         "setGain", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_gain(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_gain(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setExposure(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new exposure value (the camera will converge to this)
-    m_exposure = val;
+    m_properties.exposure = val;
 
     // Add an async task to set the exposure on the camera
     m_task_queue->addAsyncTask(
         "setExposure", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_exposure(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_exposure(handle, val, callback);
         });
 }
 
 
 void PS3EyeLibUSBCapture::setSharpness(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new sharpness value (the camera will converge to this)
-    m_sharpness = val;
+    m_properties.sharpness = val;
 
     // Add an async task to set the sharpness on the camera
     m_task_queue->addAsyncTask(
         "setSharpness", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_sharpness(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_sharpness(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setContrast(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new contrast value (the camera will converge to this)
-    m_contrast = val;
+    m_properties.contrast = val;
 
     // Add an async task to set the sharpness on the camera
     m_task_queue->addAsyncTask(
         "setContrast", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_contrast(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_contrast(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setBrightness(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new brightness value (the camera will converge to this)
-    m_brightness = val;
+    m_properties.brightness = val;
 
     // Add an async task to set the sharpness on the camera
     m_task_queue->addAsyncTask(
         "setBrightness", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_brightness(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_brightness(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setHue(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new hue value (the camera will converge to this)
-    m_hue = val;
+    m_properties.hue = val;
 
     // Add an async task to set the sharpness on the camera
     m_task_queue->addAsyncTask(
         "setHue", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_hue(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_hue(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setRedBalance(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new red balance value (the camera will converge to this)
-    m_redBalance = val;
+    m_properties.redBalance = val;
 
     // Add an async task to set the red balance on the camera
     m_task_queue->addAsyncTask(
         "setRedBalance", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_red_balance(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_red_balance(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setGreenBalance(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new green balance value (the camera will converge to this)
-    m_greenBalance = val;
+    m_properties.greenBalance = val;
 
     // Add an async task to set the green balance on the camera
     m_task_queue->addAsyncTask(
         "setGreenBalance", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_green_balance(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_green_balance(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setBlueBalance(unsigned char val)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new blue balance value (the camera will converge to this)
-    m_blueBalance = val;
+    m_properties.blueBalance = val;
 
     // Add an async task to set the red balance on the camera
     m_task_queue->addAsyncTask(
         "setBlueBalance", 
-        [this, val](async::TaskCallback<int> callback) {
-            async_set_blue_balance(m_usb_device_handle, val, callback);
+        [handle, val](async::TaskCallback<int> callback) {
+            async_set_blue_balance(handle, val, callback);
         });
 }
 
 void PS3EyeLibUSBCapture::setFlip(bool horizontal, bool vertical)
 {
+    const t_usb_device_handle handle= m_usb_device_handle;
+
     // Cache the new camera flip flags (the camera will converge to this)
-    m_flip_h= horizontal;
-    m_flip_v= vertical;
+    m_properties.flip_h= horizontal;
+    m_properties.flip_v= vertical;
 
     // Add an async task to set the red balance on the camera
     m_task_queue->addAsyncTask(
         "setFlip", 
-        [this, horizontal, vertical](async::TaskCallback<int> callback) {
-            async_set_flip(m_usb_device_handle, horizontal, vertical, callback);
+        [handle, horizontal, vertical](async::TaskCallback<int> callback) {
+            async_set_flip(handle, horizontal, vertical, callback);
         });
 }
 
 bool PS3EyeLibUSBCapture::getUSBPortPath(char *out_identifier, size_t max_identifier_length) const
 {
-    return USBDeviceManager::getInstance()->getUSBDevicePath(m_usb_device_handle, out_identifier, max_identifier_length);   
+    return USBDeviceManager::getInstance()->getUSBDevicePortPath(m_usb_device_handle, out_identifier, max_identifier_length);   
 }
 
 const unsigned char* PS3EyeLibUSBCapture::getFrame()
@@ -1033,68 +1080,75 @@ static void async_init_camera(
     uint8_t frameRate,
     async::TaskCallback<int> outCallback)
 {
-    uint16_t sensor_id = 0;
+    // Side-Effects valid for the duration of the task chain
+    struct TaskChainState
+    {
+        uint8_t sensor_id;
+
+        TaskChainState() : sensor_id(0) {}
+    };
+    TaskChainState *taskChainState = new TaskChainState;
 
     async::TaskVector<int> tasks{
         // reset bridge
         [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_reg_write(device_handle, 0xe7, 0x3a, taskDoneCallback);
         },
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_reg_write(device_handle, 0xe0, 0x08, taskDoneCallback);
         },
-            [](async::TaskCallback<int> taskDoneCallback) {
+        [](async::TaskCallback<int> taskDoneCallback) {
             ServerUtility::sleep_ms(10);
             taskDoneCallback(async::OK, 0);
         },
-            // initialize the sensor address
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        // initialize the sensor address
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_reg_write(device_handle, OV534_REG_ADDRESS, 0x42, taskDoneCallback);
         },
-            // reset sensor
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        // reset sensor
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_sccb_reg_write(device_handle, 0x12, 0x80, taskDoneCallback);
         },
-            [](async::TaskCallback<int> taskDoneCallback) {
+        [](async::TaskCallback<int> taskDoneCallback) {
             ServerUtility::sleep_ms(10);
             taskDoneCallback(async::OK, 0);
         },
-            // probe the sensor
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        // probe the sensor
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_sccb_reg_read(device_handle, 0x0a, taskDoneCallback);
         },
-            [device_handle, &sensor_id](async::TaskCallback<int> taskDoneCallback) mutable {
+        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
             async_sccb_reg_read(device_handle, 0x0a,
-                [&sensor_id, taskDoneCallback](async::ErrorCode error, int result) mutable {
-                sensor_id = result << 8;
+                [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
+                taskChainState->sensor_id = result << 8;
                 taskDoneCallback(error, result);
             });
         },
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_sccb_reg_read(device_handle, 0x0b, taskDoneCallback);
         },
-            [device_handle, &sensor_id](async::TaskCallback<int> taskDoneCallback) mutable {
+        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
             async_sccb_reg_read(device_handle, 0x0b,
-                [&sensor_id, taskDoneCallback](async::ErrorCode error, int result) mutable {
-                sensor_id |= result;
-                SERVER_LOG_DEBUG("async_init_camera") << "PS3EYE Sensor ID: " << sensor_id;
-                taskDoneCallback(error, result);
+                [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
+                    taskChainState->sensor_id |= result;
+                    SERVER_LOG_DEBUG("async_init_camera") << "PS3EYE Sensor ID: " << taskChainState->sensor_id;
+                    taskDoneCallback(error, result);
             });
         },
-            // initialize 
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        // initialize 
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_reg_write_array(device_handle, ov534_reg_initdata, ARRAY_SIZE(ov534_reg_initdata), taskDoneCallback);
         },
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_set_led(device_handle, true, taskDoneCallback);
         },
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_sccb_reg_write_array(device_handle, ov772x_reg_initdata, ARRAY_SIZE(ov772x_reg_initdata), taskDoneCallback);
         },
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_sccb_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback);
         },
-            [device_handle](async::TaskCallback<int> taskDoneCallback) {
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_set_led(device_handle, false, taskDoneCallback);
         }
     };
@@ -1103,34 +1157,36 @@ static void async_init_camera(
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
         tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        [taskChainState, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
     {
         int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+        delete taskChainState;
         outCallback(outErrorCode, outResult);
     });
 }
 
 static void async_start_camera(
-    PS3EyeLibUSBCapture *camera,
+    const t_usb_device_handle device_handle, 
+    const PS3EyeProperties &properties, 
+    PS3EyeVideoPacketProcessor* processor, 
     async::TaskCallback<int> outCallback)
 {
-    t_usb_device_handle device_handle = camera->getUSBDeviceHandle();
-    uint32_t frame_width = camera->getWidth();
-    uint8_t frame_rate = camera->getFrameRate();
-    bool bAutoGain = camera->getAutogain();
-    bool bAWB = camera->getAutoWhiteBalance();
-    uint8_t gain = camera->getGain();
-    uint8_t hue = camera->getHue();
-    uint8_t exposure = camera->getExposure();
-    uint8_t brightness = camera->getBrightness();
-    uint8_t contrast = camera->getContrast();
-    uint8_t sharpness = camera->getSharpness();
-    uint8_t redBalance = camera->getRedBalance();
-    uint8_t greenBalance = camera->getGreenBalance();
-    uint8_t blueBalance = camera->getBlueBalance();
-    bool bFlipH = camera->getFlipH();
-    bool bFlipV = camera->getFlipV();
+    const uint32_t frame_width = properties.frame_width;
+    const uint8_t frame_rate = properties.frame_rate;
+    const bool bAutoGain = properties.autogain;
+    const bool bAWB = properties.awb;
+    const uint8_t gain = properties.gain;
+    const uint8_t hue = properties.hue;
+    const uint8_t exposure = properties.exposure;
+    const uint8_t brightness = properties.brightness;
+    const uint8_t contrast = properties.contrast;
+    const uint8_t sharpness = properties.sharpness;
+    const uint8_t redBalance = properties.redBalance;
+    const uint8_t greenBalance = properties.greenBalance;
+    const uint8_t blueBalance = properties.blueBalance;
+    const bool bFlipH = properties.flip_h;
+    const bool bFlipV = properties.flip_v;
 
     async::TaskVector<int> tasks{
         [device_handle, frame_width](async::TaskCallback<int> taskDoneCallback) {
@@ -1190,7 +1246,7 @@ static void async_start_camera(
         [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_reg_write(device_handle, 0xe0, 0x00, taskDoneCallback); // start stream
         },
-        [device_handle, camera](async::TaskCallback<int> taskDoneCallback) {
+        [device_handle, processor](async::TaskCallback<int> taskDoneCallback) {
             USBTransferRequest request;
             memset(&request, 0, sizeof(USBTransferRequest));
             request.request_type= _USBRequestType_StartBulkTransfer;
@@ -1199,7 +1255,7 @@ static void async_start_camera(
             request.payload.start_bulk_transfer.in_flight_transfer_packet_count= NUM_TRANSFERS;
             request.payload.start_bulk_transfer.transfer_packet_size= TRANSFER_SIZE;
             request.payload.start_bulk_transfer.on_data_callback= PS3EyeVideoPacketProcessor::usbBulkTransferCallback_workerThread;
-            request.payload.start_bulk_transfer.transfer_callback_userdata= camera->getVideoPacketProcessor();
+            request.payload.start_bulk_transfer.transfer_callback_userdata= processor;
 
             // Send a request to the USBDeviceManager to start a bulk transfer stream for video frames
             USBDeviceManager::getInstance()->submitTransferRequest(
@@ -1225,11 +1281,9 @@ static void async_start_camera(
 }
 
 static void async_stop_camera(
-    PS3EyeLibUSBCapture *camera,
+    const t_usb_device_handle device_handle,
     async::TaskCallback<int> outCallback)
 {
-    t_usb_device_handle device_handle = camera->getUSBDeviceHandle();
-
     async::TaskVector<int> tasks{
         [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback); // stop stream
@@ -1237,7 +1291,7 @@ static void async_stop_camera(
         [device_handle](async::TaskCallback<int> taskDoneCallback) {
             async_ov534_set_led(device_handle, false, taskDoneCallback);
         },
-        [device_handle, camera](async::TaskCallback<int> taskDoneCallback) {
+        [device_handle](async::TaskCallback<int> taskDoneCallback) {
             USBTransferRequest request;
             memset(&request, 0, sizeof(USBTransferRequest));
             request.request_type= _USBRequestType_CancelBulkTransfer;
@@ -1274,7 +1328,15 @@ static void async_set_autogain(
     async::TaskCallback<int> outCallback)
 {
     async::TaskVector<int> tasks;
-    uint8_t read_reg_0x64_result= 0;
+
+    // Side-Effects valid for the duration of the task chain
+    struct TaskChainState
+    {
+        uint8_t read_reg_0x64_result;
+
+        TaskChainState() : read_reg_0x64_result(0) {}
+    };
+    TaskChainState *taskChainState = new TaskChainState;
 
     if (bAutoGain) 
     {
@@ -1283,16 +1345,16 @@ static void async_set_autogain(
                 async_sccb_reg_write(device_handle, 0x13, 0xf7, taskDoneCallback); //AGC,AEC,AWB ON
             });
         tasks.push_back(
-            [device_handle, &read_reg_0x64_result](async::TaskCallback<int> taskDoneCallback) mutable {
+            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
                 async_sccb_reg_read(device_handle, 0x64, 
-                    [&read_reg_0x64_result, taskDoneCallback](async::ErrorCode error, int result) mutable {
-                        read_reg_0x64_result= result;
+                    [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
+                        taskChainState->read_reg_0x64_result= result;
                         taskDoneCallback(error, result);
                     });
             });
         tasks.push_back(
-            [device_handle, read_reg_0x64_result](async::TaskCallback<int> taskDoneCallback) {
-                async_sccb_reg_write(device_handle, 0x64, read_reg_0x64_result | 0x03, taskDoneCallback);
+            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+                async_sccb_reg_write(device_handle, 0x64, taskChainState->read_reg_0x64_result | 0x03, taskDoneCallback);
             });
     }
     else 
@@ -1302,16 +1364,16 @@ static void async_set_autogain(
                 async_sccb_reg_write(device_handle, 0x13, 0xf0, taskDoneCallback); //AGC,AEC,AWB OFF
             });
         tasks.push_back(
-            [device_handle, &read_reg_0x64_result](async::TaskCallback<int> taskDoneCallback) mutable {
+            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
                 async_sccb_reg_read(device_handle, 0x64, 
-                    [&read_reg_0x64_result, taskDoneCallback](async::ErrorCode error, int result) mutable {
-                        read_reg_0x64_result= result;
+                    [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
+                        taskChainState->read_reg_0x64_result= result;
                         taskDoneCallback(error, result);
                     });
             });
         tasks.push_back(
-            [device_handle, read_reg_0x64_result](async::TaskCallback<int> taskDoneCallback) {
-                async_sccb_reg_write(device_handle, 0x64, read_reg_0x64_result & 0xFC, taskDoneCallback);
+            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+                async_sccb_reg_write(device_handle, 0x64, taskChainState->read_reg_0x64_result & 0xFC, taskDoneCallback);
             });
         tasks.push_back(
             [device_handle, gain](async::TaskCallback<int> taskDoneCallback) {
@@ -1327,10 +1389,11 @@ static void async_set_autogain(
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
         tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        [taskChainState, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
     {
         int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+        delete taskChainState;
         outCallback(outErrorCode, outResult);
     });
 }
@@ -1483,18 +1546,25 @@ static void async_set_flip(
     bool vertical, 
     async::TaskCallback<int> outCallback)
 {
-    uint8_t read_reg_0x0C_result= 0;
+    // Side-Effects valid for the duration of the task chain
+    struct TaskChainState
+    {
+        uint8_t read_reg_0x0C_result;
+
+        TaskChainState() : read_reg_0x0C_result(0) {}
+    };
+    TaskChainState *taskChainState = new TaskChainState;
 
     async::TaskVector<int> tasks {
-        [device_handle, &read_reg_0x0C_result](async::TaskCallback<int> taskDoneCallback) mutable {
+        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
             async_sccb_reg_read(device_handle, 0x0C, 
-                [&read_reg_0x0C_result, taskDoneCallback](async::ErrorCode error, int result) mutable {
-                    read_reg_0x0C_result= result & ~0xC0;
+                [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
+                    taskChainState->read_reg_0x0C_result= result & ~0xC0;
                     taskDoneCallback(error, result);
                 });
         },
-        [device_handle, read_reg_0x0C_result, horizontal, vertical](async::TaskCallback<int> taskDoneCallback) {
-            uint8_t val= read_reg_0x0C_result;
+        [device_handle, taskChainState, horizontal, vertical](async::TaskCallback<int> taskDoneCallback) {
+            uint8_t val= taskChainState->read_reg_0x0C_result;
             if (!horizontal) val |= 0x40;
             if (!vertical) val |= 0x80;
             async_sccb_reg_write(device_handle, 0x0C, val, taskDoneCallback);
@@ -1505,10 +1575,11 @@ static void async_set_flip(
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
         tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        [taskChainState, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+            delete taskChainState;
             outCallback(outErrorCode, outResult);
         });
 }
@@ -1588,33 +1659,43 @@ static void async_sccb_reg_write_array(
     int sequenceLength, 
     async::TaskCallback<int> outCallback)
 {
-    const uint8_t (*data)[2]= sequence;
-    int len = sequenceLength;
+    // Side-Effects valid for the duration of the task chain
+    struct TaskChainState
+    {
+        const uint8_t (*data)[2];
+        int len;
+
+        TaskChainState(const uint8_t (*sequence)[2], int sequenceLength)
+            : data(sequence)
+            , len(sequenceLength)
+        {}
+    };
+    TaskChainState *taskChainState = new TaskChainState(sequence, sequenceLength);
 
     // Loop-Test function
     // Keep running Work function while Loop-Test return true
-    auto loop_test = [&len]() mutable
+    auto loop_test = [taskChainState]()
     {
-        --len;
-        return len >= 0;
+        --taskChainState->len;
+
+        return taskChainState->len >= 0;
     };
 
     // Work function
     // This gets run each iteration
-    auto work_func = [device_handle, &data](
-        std::function<void(async::ErrorCode error)> work_done_callback) mutable
+    auto work_func = [device_handle, taskChainState](std::function<void(async::ErrorCode error)> work_done_callback)
     {
-        if ((*data)[0] != 0xff) 
+        if ((*taskChainState->data)[0] != 0xff) 
         {
             // Write to the register...
             async_sccb_reg_write(
                 device_handle,
-                (*data)[0], // register
-                (*data)[1], // value
-                [&data, work_done_callback](async::ErrorCode errorCode, int result) mutable
+                (*taskChainState->data)[0], // register
+                (*taskChainState->data)[1], // value
+                [taskChainState, work_done_callback](async::ErrorCode errorCode, int result)
                 {
                     //... then increment the sequence pointer
-                    data++;
+                    taskChainState->data++;
 
                     // Move on to the next iteration
                     work_done_callback(errorCode);
@@ -1625,15 +1706,16 @@ static void async_sccb_reg_write_array(
             // Read the register first..
             async_sccb_reg_read(
                 device_handle,
-                (*data)[1], // register
-                [device_handle, &data, work_done_callback](async::ErrorCode errorCode, int result) mutable
+                (*taskChainState->data)[1], // register
+                [device_handle, taskChainState, work_done_callback](async::ErrorCode errorCode, int result) 
                 {
                     // ... then write 0x00 to reg 0xff ...
-                    async_sccb_reg_write(device_handle,0xff, 0x00, 
-                        [&data, work_done_callback](async::ErrorCode errorCode, int data) mutable
+                    async_sccb_reg_write(
+                        device_handle, 0xff, 0x00, 
+                        [taskChainState, work_done_callback](async::ErrorCode errorCode, int result) 
                         {
                             // ... then increment the sequence pointer
-                            data++;
+                            taskChainState->data++;
 
                             // Move on to the next iteration
                             work_done_callback(errorCode);
@@ -1642,8 +1724,16 @@ static void async_sccb_reg_write_array(
         }
     };
 
+    // Final-Callback function
+    // This gets run after the Loop-Test function returns false
+    auto final_callback = [taskChainState, outCallback](async::ErrorCode errorCode)
+    {
+        delete taskChainState;
+        outCallback(errorCode, 0);
+    };
+
     // Write out the (reg - val) pair array
-    async::whilst(loop_test, work_func);
+    async::whilst(loop_test, work_func, final_callback);
 }
 
 static void async_sccb_reg_read(
@@ -1697,39 +1787,50 @@ static void async_sccb_check_status(
     t_usb_device_handle device_handle,
     async::TaskCallback<int> outCallback)
 {
-    int sccbStatusResult= 0;
-    bool bQuerySuccess= false;
-    int queryAttempCount = 0;
+    // Side-Effects valid for the duration of the task chain
+    struct TaskChainState
+    {
+        int sccbStatusResult;
+        bool bQuerySuccess;
+        int queryAttempCount;
+
+        TaskChainState()
+            : sccbStatusResult(0)
+            , bQuerySuccess(false)
+            , queryAttempCount(0)
+        {}
+    };
+    TaskChainState *taskChainState = new TaskChainState();
 
     // Loop-Test function
     // Keep running Work function while Loop-Test return true
-    auto loop_test = [&queryAttempCount, bQuerySuccess]() mutable
+    auto loop_test = [taskChainState]()
     {
-        bool keep_going = !bQuerySuccess && queryAttempCount < 5;
-        queryAttempCount++;
+        bool keep_going = !taskChainState->bQuerySuccess && taskChainState->queryAttempCount < 5;
+        taskChainState->queryAttempCount++;
         return keep_going;
     };
 
     // Work function
     // This gets run each iteration
-    auto work_func = [device_handle, &bQuerySuccess, &sccbStatusResult](
-        std::function<void(async::ErrorCode error)> work_done_callback) mutable
+    auto work_func = [device_handle, taskChainState](
+        std::function<void(async::ErrorCode error)> work_done_callback)
     {
         async_ov534_reg_read(
             device_handle,
             OV534_REG_STATUS,
-            [&bQuerySuccess, &sccbStatusResult, work_done_callback](async::ErrorCode errorCode, int data) mutable
+            [taskChainState, work_done_callback](async::ErrorCode errorCode, int data)
             {
                 if (errorCode == async::OK)
                 {
-                    bQuerySuccess = true;
+                    taskChainState->bQuerySuccess = true;
 
                     switch (data)
                     {
                     case 0x00:
-                        sccbStatusResult = 1;
+                        taskChainState->sccbStatusResult = 1;
                     case 0x04:
-                        sccbStatusResult = 0;
+                        taskChainState->sccbStatusResult = 0;
                     case 0x03:
                         break;
                     default:
@@ -1744,10 +1845,11 @@ static void async_sccb_check_status(
 
     // Final-Callback function
     // This gets run after the Loop-Test function returns false
-    auto final_callback = [sccbStatusResult, outCallback](async::ErrorCode errorCode)
-    {
+    auto final_callback = [taskChainState, outCallback](async::ErrorCode errorCode)
+    {        
         // Send the final query result
-        outCallback(errorCode, sccbStatusResult);
+        outCallback(errorCode, taskChainState->sccbStatusResult);
+        delete taskChainState;
     };
 
     // Try to poll status up to 5 time max from the OV534_REG_STATUS register
@@ -1776,7 +1878,7 @@ static void async_ov534_reg_write(
     // Submit the async usb control transfer request...
     USBDeviceManager::getInstance()->submitTransferRequest(
         request, 
-        [&outCallback](USBTransferResult &result) 
+        [outCallback](USBTransferResult &result) 
         {
             assert(result.result_type == _USBResultType_ControlTransfer);
 
@@ -1804,35 +1906,53 @@ static void async_ov534_reg_write_array(
     int sequenceLength,
     async::TaskCallback<int> outCallback)
 {
-    const uint8_t (*data)[2]= sequence;
-    int len = sequenceLength;
+    // Side-Effects valid for the duration of the task chain
+    struct TaskChainState
+    {
+        const uint8_t (*data)[2];
+        int len;
+
+        TaskChainState(const uint8_t (*sequence)[2], int sequenceLength)
+            : data(sequence)
+            , len(sequenceLength)
+        {}
+    };
+    TaskChainState *taskChainState = new TaskChainState(sequence, sequenceLength);
 
     // Loop-Test function
     // Keep running Work function while Loop-Test return true
-    auto loop_test = [&len]() mutable
+    auto loop_test = [taskChainState]()
     {
-        --len;
-        return len >= 0;
+        --taskChainState->len;
+        return taskChainState->len >= 0;
     };
 
     // Work function
     // This gets run each iteration
-    auto work_func = [device_handle, &data](
-        std::function<void(async::ErrorCode error)> work_done_callback) mutable
+    auto work_func = [device_handle, taskChainState](
+        std::function<void(async::ErrorCode error)> work_done_callback)
     {
         async_ov534_reg_write(
             device_handle,
-            (*data)[0], // register
-            (*data)[1], // value
-            [&data, work_done_callback](async::ErrorCode errorCode, int result) mutable
+            (*taskChainState->data)[0], // register
+            (*taskChainState->data)[1], // value
+            [taskChainState, work_done_callback](async::ErrorCode errorCode, int result)
             {
-                data++;
+                taskChainState->data++;
                 work_done_callback(errorCode);
             });
     };
 
+    // Final-Callback function
+    // This gets run after the Loop-Test function returns false
+    auto final_callback = [taskChainState, outCallback](async::ErrorCode errorCode)
+    {        
+        outCallback(errorCode, 0);
+        delete taskChainState;
+    };
+
     // Write out the (reg - val) pair array
-    async::whilst(loop_test, work_func);
+    async::whilst(loop_test, work_func, final_callback);
 }
 
 static void async_ov534_reg_read(
@@ -1855,7 +1975,7 @@ static void async_ov534_reg_read(
     // Submit the async usb control transfer request...
     USBDeviceManager::getInstance()->submitTransferRequest(
         request,
-        [&outCallback](USBTransferResult &result)
+        [outCallback](USBTransferResult &result)
         {
             assert(result.result_type == _USBResultType_ControlTransfer);
 
@@ -1885,49 +2005,60 @@ static void async_ov534_set_led(
     bool bLedOn, 
     async::TaskCallback<int> outCallback)
 {
-    uint8_t read_reg_result= 0;
+    // Side-Effects valid for the duration of the task chain
+    struct TaskChainState
+    {
+        uint8_t read_reg_result;
+
+        TaskChainState(): read_reg_result(0)
+        {}
+    };
+    TaskChainState *taskChainState = new TaskChainState();
 
     async::TaskVector<int> tasks {
         // Change register value 0x21
-        [device_handle, &read_reg_result](async::TaskCallback<int> taskDoneCallback) mutable {
-            async_ov534_reg_read(device_handle, 0x21, 
-                [&read_reg_result, taskDoneCallback](async::ErrorCode error, int result) mutable {
-                    read_reg_result= result | 0x80;
+        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_read(
+                device_handle, 0x21, 
+                [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
+                    taskChainState->read_reg_result= result | 0x80;
                     taskDoneCallback(error, result);
                 });
         },
-        [device_handle, read_reg_result](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0x21, read_reg_result, taskDoneCallback);
+        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, 0x21, taskChainState->read_reg_result, taskDoneCallback);
         },
         // Change register value 0x23
-        [device_handle, &read_reg_result, bLedOn](async::TaskCallback<int> taskDoneCallback) mutable {
-            async_ov534_reg_read(device_handle, 0x23, 
-                [&read_reg_result, taskDoneCallback, bLedOn](async::ErrorCode error, int result) mutable {
+        [device_handle, taskChainState, bLedOn](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_read(
+                device_handle, 0x23, 
+                [taskChainState, taskDoneCallback, bLedOn](async::ErrorCode error, int result) {
                     if (bLedOn)
-                        read_reg_result= result | 0x80;
+                        taskChainState->read_reg_result= result | 0x80;
                     else
-                        read_reg_result= result & ~0x80;
+                        taskChainState->read_reg_result= result & ~0x80;
                     taskDoneCallback(error, result);
                 });
         },
-        [device_handle, read_reg_result](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0x23, read_reg_result, taskDoneCallback);
+        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, 0x23, taskChainState->read_reg_result, taskDoneCallback);
         },
     };
 
     if (!bLedOn)
     {
         tasks.push_back(
-            [device_handle, &read_reg_result](async::TaskCallback<int> taskDoneCallback) mutable {
-                async_ov534_reg_read(device_handle, 0x21, 
-                    [&read_reg_result, taskDoneCallback](async::ErrorCode error, int result) mutable {
-                        read_reg_result= result & ~0x80;
+            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+                async_ov534_reg_read(
+                    device_handle, 0x21, 
+                    [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
+                        taskChainState->read_reg_result= result & ~0x80;
                         taskDoneCallback(error, result);
                     });
             });
         tasks.push_back(
-            [device_handle, read_reg_result](async::TaskCallback<int> taskDoneCallback) {
-                async_ov534_reg_write(device_handle, 0x21, read_reg_result, taskDoneCallback);
+            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+                async_ov534_reg_write(device_handle, 0x21, taskChainState->read_reg_result, taskDoneCallback);
             });
     }
 
@@ -1935,13 +2066,14 @@ static void async_ov534_set_led(
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
         tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        [taskChainState, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             // NOTE: If the task chain succeeded, 
             // the final result value will be the value read from camera register
             // via the ov534_reg_read task.
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+            delete taskChainState;
             outCallback(outErrorCode, outResult);
         });
 }

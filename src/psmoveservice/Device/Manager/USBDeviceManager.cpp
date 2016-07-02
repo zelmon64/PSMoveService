@@ -107,7 +107,7 @@ public:
     {
         bool bOpened= false;
 
-        if (getIsUSBDeviceOpen(handle))
+        if (!getIsUSBDeviceOpen(handle))
         {
             LibUSBDeviceState *state= get_libusb_state_from_handle(handle);
 
@@ -223,6 +223,46 @@ public:
                     dev_desc.idVendor, dev_desc.idProduct, device_index);
 
             bSuccess = (nCharsWritten > 0);
+        }
+
+        return bSuccess;
+    }
+
+    bool getUSBDevicePortPath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const
+    {
+        bool bSuccess = false;
+        int device_index = static_cast<int>(handle);        
+
+        if (device_index >= 0 && device_index < getUSBDeviceCount())
+        {
+            libusb_device *device = m_device_state_list[device_index].device;
+            uint8_t port_numbers[MAX_USB_DEVICE_PORT_PATH];
+
+            memset(outBuffer, 0, bufferSize);
+
+            memset(port_numbers, 0, sizeof(port_numbers));
+            int port_count = libusb_get_port_numbers(device, port_numbers, MAX_USB_DEVICE_PORT_PATH);
+            int bus_id = libusb_get_bus_number(device);
+
+            ServerUtility::format_string(outBuffer, bufferSize, "b%d", bus_id);
+            if (port_count > 0)
+            {
+                bSuccess = true;
+
+                for (int port_index = 0; port_index < port_count; ++port_index)
+                {
+                    uint8_t port_number = port_numbers[port_index];
+
+                    if (ServerUtility::format_string(
+                            outBuffer, bufferSize, 
+                            (port_index == 0) ? "%s_p%d" : "%s.%d", 
+                            outBuffer, port_number) < 0)
+                    {
+                        bSuccess = false;
+                        break;
+                    }
+                }
+            }
         }
 
         return bSuccess;
@@ -349,7 +389,7 @@ protected:
 
         LibUSBDeviceState *state = get_libusb_state_from_handle(request.usb_device_handle);
         eUSBResultCode result_code;
-        bool bSuccess= false;
+        bool bSuccess= true;
 
         if (state != nullptr)
         {
@@ -363,6 +403,7 @@ protected:
                 if (transfer == nullptr)
                 {
                     result_code = _USBResultCode_NoMemory;
+                    bSuccess= false;
                 }
             }
 
@@ -372,6 +413,7 @@ protected:
                 if (buffer == nullptr)
                 {
                     result_code = _USBResultCode_NoMemory;
+                    bSuccess= false;
                 }
             }
 
@@ -381,6 +423,7 @@ protected:
                 if (requestStateOnHeap == nullptr)
                 {
                     result_code = _USBResultCode_NoMemory;
+                    bSuccess= false;
                 }
             }
 
@@ -421,12 +464,12 @@ protected:
                     // One more active control transfer
                     ++m_active_control_transfers;
 
-                    bSuccess = true;
                     result_code = _USBResultCode_Started;
                 }
                 else
                 {
                     result_code = _USBResultCode_SubmitFailed;
+                    bSuccess= false;
                 }
             }
 
@@ -451,6 +494,7 @@ protected:
         else
         {
             result_code = _USBResultCode_BadHandle;
+            bSuccess= false;
         }
 
         // If the control transfer didn't successfully start, post a failure result now
@@ -552,8 +596,8 @@ protected:
                 auto it = std::find_if(
                     m_active_bulk_transfer_bundles.begin(),
                     m_active_bulk_transfer_bundles.end(),
-                    [this, &request](const USBBulkTransferBundle *bundle) {
-                    return bundle->getUSBDeviceHandle() == request.usb_device_handle;
+                    [&request](const USBBulkTransferBundle *bundle) {
+                        return bundle->getUSBDeviceHandle() == request.usb_device_handle;
                 });
 
                 if (it == m_active_bulk_transfer_bundles.end())
@@ -635,9 +679,9 @@ protected:
             auto it = std::find_if(
                 m_active_bulk_transfer_bundles.begin(),
                 m_active_bulk_transfer_bundles.end(),
-                [this, &request](const USBBulkTransferBundle *bundle) {
-                return bundle->getUSBDeviceHandle() == request.usb_device_handle;
-            });
+                [&request](const USBBulkTransferBundle *bundle) {
+                    return bundle->getUSBDeviceHandle() == request.usb_device_handle;
+                });
 
             if (it != m_active_bulk_transfer_bundles.end())
             {
@@ -791,12 +835,13 @@ protected:
 
     void freeDeviceStateList()
     {
-        std::for_each(
-            m_device_state_list.begin(), 
-            m_device_state_list.end(), [this](LibUSBDeviceState &device_state) {
-                closeUSBDevice(device_state.handle);
-                libusb_unref_device(device_state.device);
-            });
+        for (auto it = m_device_state_list.begin(); it != m_device_state_list.end(); ++it)
+        {
+            const LibUSBDeviceState &device_state= *it;
+
+            closeUSBDevice(device_state.handle);
+            libusb_unref_device(device_state.device);
+        }
         m_device_state_list.clear();
     }
 
@@ -907,6 +952,11 @@ bool USBDeviceManager::getUSBDeviceInfo(t_usb_device_handle handle, USBDeviceInf
 bool USBDeviceManager::getUSBDevicePath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const
 {
     return m_implementation_ptr->getUSBDevicePath(handle, outBuffer, bufferSize);
+}
+
+bool USBDeviceManager::getUSBDevicePortPath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const
+{
+    return m_implementation_ptr->getUSBDevicePortPath(handle, outBuffer, bufferSize);
 }
 
 bool USBDeviceManager::getIsUSBDeviceOpen(t_usb_device_handle handle) const

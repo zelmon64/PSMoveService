@@ -38,6 +38,7 @@ public:
     t_usb_device_handle getNextUSBDeviceHandle(t_usb_device_handle handle) const;
     bool getUSBDeviceInfo(t_usb_device_handle handle, USBDeviceInfo &outDeviceInfo) const;
     bool getUSBDevicePath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const;
+    bool getUSBDevicePortPath(t_usb_device_handle handle, char *outBuffer, size_t bufferSize) const;
     bool getIsUSBDeviceOpen(t_usb_device_handle handle) const;
 
     // -- Request Queue ----
