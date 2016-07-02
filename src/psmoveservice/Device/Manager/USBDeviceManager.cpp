@@ -13,6 +13,14 @@
 
 #include <boost/lockfree/spsc_queue.hpp>
 
+//-- macros -----
+//#define DEBUG_USBDEVICEMANAGER
+#if defined(DEBUG_USBDEVICEMANAGER)
+#define debug(...) fprintf(stdout, __VA_ARGS__)
+#else
+#define debug(...) 
+#endif
+
 //-- private implementation -----
 // -USBAsyncRequestManagerImpl-
 /// Internal implementation of the USB async request manager.
@@ -285,8 +293,16 @@ public:
     bool submitTransferRequest(const USBTransferRequest &request, std::function<void(USBTransferResult&)> callback)
     {
         RequestState requestState = {request, callback};
+        bool bAddedRequest= false;
 
-        return request_queue.push(requestState);
+        if (request_queue.push(requestState))
+        {
+            // Give the other thread a chance to process the request
+            ServerUtility::sleep_ms(10);
+            bAddedRequest= true;
+        }
+
+        return bAddedRequest;
     }
 
 protected:
@@ -526,7 +542,7 @@ protected:
             transfer->actual_length > 0)
         {
             memcpy(&result.payload.control_transfer.data, libusb_control_transfer_get_data(transfer), transfer->actual_length);
-            result.payload.control_transfer.dataLength= transfer->length;
+            result.payload.control_transfer.dataLength= transfer->actual_length;
         }        
 
         switch (transfer->status) 
@@ -613,6 +629,7 @@ protected:
                         {
                             // Success! Add the bundle to the list of active bundles
                             m_active_bulk_transfer_bundles.push_back(bundle);
+                            result_code = _USBResultCode_Started;
                         }
                         else
                         {                            

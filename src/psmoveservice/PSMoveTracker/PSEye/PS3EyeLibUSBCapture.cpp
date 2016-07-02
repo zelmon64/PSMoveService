@@ -413,10 +413,25 @@ static uint8_t compute_frame_rate_settings(const uint32_t frame_width, const uin
 static void log_usb_result_code(const char *function_name, eUSBResultCode result_code);
 
 //-- public interface -----
-struct USBAsyncTask
+//-- NamedAsyncTask -----
+struct NamedAsyncTask
 {
     std::string task_name;
     async::Task<int> task_func;
+};
+
+//-- USBAsyncTaskQueue -----
+struct AsyncTaskChain
+{
+    async::TaskVector<int> tasks;
+
+    AsyncTaskChain() : tasks()
+    {}
+
+    void addTask(const async::Task<int> &task)
+    {
+        tasks.push_back(task);
+    }
 };
 
 //-- USBAsyncTaskQueue -----
@@ -429,7 +444,7 @@ public:
 
     void addAsyncTask(const std::string &task_name, async::Task<int> task_func)
     {
-        USBAsyncTask task= {task_name, task_func};
+        NamedAsyncTask task= {task_name, task_func};
          
         m_taskQueue.push_back(task);
 
@@ -445,8 +460,8 @@ public:
     {
         if (m_taskQueue.size() > 0)
         {
-            // Get the next task in the list
-            USBAsyncTask task= m_taskQueue.front();
+            SERVER_LOG_INFO("PSEYECaptureCAM_LibUSB::startNextTask") 
+                << "Starting Camera Async Task: " << m_taskQueue.front().task_name;
 
             // Once the task completes, start the next task (if any).
             // NOTE: The [&] capture on this lambda means it gets a reference to 
@@ -455,8 +470,9 @@ public:
                 [&](async::ErrorCode error, int result) {
                     if (error == async::FAIL)
                     {
+                        NamedAsyncTask task= m_taskQueue.front();
                         SERVER_LOG_ERROR("PSEYECaptureCAM_LibUSB::startNextTask") 
-                            << "Camera Async Task(" << task.task_name 
+                            << "Camera Async Task(" << task.task_name
                             << ") failed with code: " << result;
                     }
 
@@ -464,12 +480,12 @@ public:
                     startNextTask();
                 };
 
-            // Start the next task
-            task.task_func(onTaskCompleted);
+            // Start the next task at the front of the queue
+            m_taskQueue.front().task_func(onTaskCompleted);
         }
     }
 
-    std::deque<USBAsyncTask> m_taskQueue;
+    std::deque<NamedAsyncTask> m_taskQueue;
 };
 
 //-- PS3EyeVideoPacketProcessor -----
@@ -1080,90 +1096,90 @@ static void async_init_camera(
     uint8_t frameRate,
     async::TaskCallback<int> outCallback)
 {
-    // Side-Effects valid for the duration of the task chain
-    struct TaskChainState
+    struct AsyncTaskChain_Init : AsyncTaskChain
     {
         uint8_t sensor_id;
 
-        TaskChainState() : sensor_id(0) {}
+        AsyncTaskChain_Init() 
+            : AsyncTaskChain()
+            , sensor_id(0)
+        {}
     };
-    TaskChainState *taskChainState = new TaskChainState;
+    AsyncTaskChain_Init *taskChain = new AsyncTaskChain_Init;
 
-    async::TaskVector<int> tasks{
-        // reset bridge
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0xe7, 0x3a, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0xe0, 0x08, taskDoneCallback);
-        },
-        [](async::TaskCallback<int> taskDoneCallback) {
-            ServerUtility::sleep_ms(10);
-            taskDoneCallback(async::OK, 0);
-        },
-        // initialize the sensor address
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, OV534_REG_ADDRESS, 0x42, taskDoneCallback);
-        },
-        // reset sensor
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write(device_handle, 0x12, 0x80, taskDoneCallback);
-        },
-        [](async::TaskCallback<int> taskDoneCallback) {
-            ServerUtility::sleep_ms(10);
-            taskDoneCallback(async::OK, 0);
-        },
-        // probe the sensor
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_read(device_handle, 0x0a, taskDoneCallback);
-        },
-        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_read(device_handle, 0x0a,
-                [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
-                taskChainState->sensor_id = result << 8;
+    // reset bridge
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, 0xe7, 0x3a, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, 0xe0, 0x08, taskDoneCallback);
+    });
+    taskChain->addTask([](async::TaskCallback<int> taskDoneCallback) {
+        ServerUtility::sleep_ms(10);
+        taskDoneCallback(async::OK, 0);
+    });
+    // initialize the sensor address
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, OV534_REG_ADDRESS, 0x42, taskDoneCallback);
+    });
+    // reset sensor
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write(device_handle, 0x12, 0x80, taskDoneCallback);
+    });
+    taskChain->addTask([](async::TaskCallback<int> taskDoneCallback) {
+        ServerUtility::sleep_ms(10);
+        taskDoneCallback(async::OK, 0);
+    });
+    // probe the sensor
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_read(device_handle, 0x0a, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_read(device_handle, 0x0a,
+            [taskChain, taskDoneCallback](async::ErrorCode error, int result) {
+            taskChain->sensor_id = result << 8;
+            taskDoneCallback(error, result);
+        });
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_read(device_handle, 0x0b, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_read(device_handle, 0x0b,
+            [taskChain, taskDoneCallback](async::ErrorCode error, int result) {
+                taskChain->sensor_id |= result;
+                SERVER_LOG_DEBUG("async_init_camera") << "PS3EYE Sensor ID: " << taskChain->sensor_id;
                 taskDoneCallback(error, result);
-            });
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_read(device_handle, 0x0b, taskDoneCallback);
-        },
-        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_read(device_handle, 0x0b,
-                [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
-                    taskChainState->sensor_id |= result;
-                    SERVER_LOG_DEBUG("async_init_camera") << "PS3EYE Sensor ID: " << taskChainState->sensor_id;
-                    taskDoneCallback(error, result);
-            });
-        },
-        // initialize 
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write_array(device_handle, ov534_reg_initdata, ARRAY_SIZE(ov534_reg_initdata), taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_set_led(device_handle, true, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write_array(device_handle, ov772x_reg_initdata, ARRAY_SIZE(ov772x_reg_initdata), taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_set_led(device_handle, false, taskDoneCallback);
-        }
-    };
+        });
+    });
+    // initialize 
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write_array(device_handle, ov534_reg_initdata, ARRAY_SIZE(ov534_reg_initdata), taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_set_led(device_handle, true, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write_array(device_handle, ov772x_reg_initdata, ARRAY_SIZE(ov772x_reg_initdata), taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_set_led(device_handle, false, taskDoneCallback);
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [taskChainState, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
-    {
-        int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        {
+            int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
-        delete taskChainState;
-        outCallback(outErrorCode, outResult);
-    });
+            delete taskChain;
+            outCallback(outErrorCode, outResult);
+        });
 }
 
 static void async_start_camera(
@@ -1188,136 +1204,138 @@ static void async_start_camera(
     const bool bFlipH = properties.flip_h;
     const bool bFlipV = properties.flip_v;
 
-    async::TaskVector<int> tasks{
-        [device_handle, frame_width](async::TaskCallback<int> taskDoneCallback) {
-            if (frame_width == 320) // 320x240
-                async_ov534_reg_write_array(device_handle, bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga), taskDoneCallback);
-            else // 640x480 
-                async_ov534_reg_write_array(device_handle, bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga), taskDoneCallback);
-        },
-        [device_handle, frame_width](async::TaskCallback<int> taskDoneCallback) {
-            if (frame_width == 320) // 320x240
-                async_sccb_reg_write_array(device_handle, sensor_start_qvga, ARRAY_SIZE(sensor_start_qvga), taskDoneCallback);
-            else // 640x480
-                async_sccb_reg_write_array(device_handle, sensor_start_vga, ARRAY_SIZE(sensor_start_vga), taskDoneCallback);
-        },
-        [device_handle, frame_width, frame_rate](async::TaskCallback<int> taskDoneCallback) {
-            async_set_frame_rate(device_handle, frame_width, frame_rate, taskDoneCallback);
-        },
-        [device_handle, bAutoGain, gain, exposure](async::TaskCallback<int> taskDoneCallback) {
-            async_set_autogain(device_handle, bAutoGain, gain, exposure, taskDoneCallback);
-        },
-        [device_handle, bAWB](async::TaskCallback<int> taskDoneCallback) {
-            async_set_auto_white_balance(device_handle, bAWB, taskDoneCallback);
-        },
-        [device_handle, gain](async::TaskCallback<int> taskDoneCallback) {
-            async_set_gain(device_handle, gain, taskDoneCallback);
-        },
-        [device_handle, hue](async::TaskCallback<int> taskDoneCallback) {
-            async_set_hue(device_handle, hue, taskDoneCallback);
-        },
-        [device_handle, exposure](async::TaskCallback<int> taskDoneCallback) {
-            async_set_exposure(device_handle, exposure, taskDoneCallback);
-        },
-        [device_handle, brightness](async::TaskCallback<int> taskDoneCallback) {
-            async_set_brightness(device_handle, brightness, taskDoneCallback);
-        },
-        [device_handle, contrast](async::TaskCallback<int> taskDoneCallback) {
-            async_set_contrast(device_handle, contrast, taskDoneCallback);
-        },
-        [device_handle, sharpness](async::TaskCallback<int> taskDoneCallback) {
-            async_set_sharpness(device_handle, sharpness, taskDoneCallback);
-        },
-        [device_handle, redBalance](async::TaskCallback<int> taskDoneCallback) {
-            async_set_red_balance(device_handle, redBalance, taskDoneCallback);
-        },
-        [device_handle, blueBalance](async::TaskCallback<int> taskDoneCallback) {
-            async_set_blue_balance(device_handle, blueBalance, taskDoneCallback);
-        },
-        [device_handle, greenBalance](async::TaskCallback<int> taskDoneCallback) {
-            async_set_green_balance(device_handle, greenBalance, taskDoneCallback);
-        },
-        [device_handle, bFlipH, bFlipV](async::TaskCallback<int> taskDoneCallback) {
-            async_set_flip(device_handle, bFlipH, bFlipV, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_set_led(device_handle, true, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0xe0, 0x00, taskDoneCallback); // start stream
-        },
-        [device_handle, processor](async::TaskCallback<int> taskDoneCallback) {
-            USBTransferRequest request;
-            memset(&request, 0, sizeof(USBTransferRequest));
-            request.request_type= _USBRequestType_StartBulkTransfer;
-            request.payload.start_bulk_transfer.usb_device_handle= device_handle;
-            request.payload.start_bulk_transfer.bAutoResubmit= true;
-            request.payload.start_bulk_transfer.in_flight_transfer_packet_count= NUM_TRANSFERS;
-            request.payload.start_bulk_transfer.transfer_packet_size= TRANSFER_SIZE;
-            request.payload.start_bulk_transfer.on_data_callback= PS3EyeVideoPacketProcessor::usbBulkTransferCallback_workerThread;
-            request.payload.start_bulk_transfer.transfer_callback_userdata= processor;
+    AsyncTaskChain *taskChain = new AsyncTaskChain;
 
-            // Send a request to the USBDeviceManager to start a bulk transfer stream for video frames
-            USBDeviceManager::getInstance()->submitTransferRequest(
-                request, 
-                [taskDoneCallback](USBTransferResult &result) {
-                    assert(result.result_type == _USBResultType_BulkTransfer);
-                    log_usb_result_code("async_start_camera", result.payload.bulk_transfer.result_code); 
-                    taskDoneCallback(async::OK, result.payload.bulk_transfer.result_code);
-                });
-        }
-    };
+    taskChain->addTask([device_handle, frame_width](async::TaskCallback<int> taskDoneCallback) {
+        if (frame_width == 320) // 320x240
+            async_ov534_reg_write_array(device_handle, bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga), taskDoneCallback);
+        else // 640x480 
+            async_ov534_reg_write_array(device_handle, bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga), taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, frame_width](async::TaskCallback<int> taskDoneCallback) {
+        if (frame_width == 320) // 320x240
+            async_sccb_reg_write_array(device_handle, sensor_start_qvga, ARRAY_SIZE(sensor_start_qvga), taskDoneCallback);
+        else // 640x480
+            async_sccb_reg_write_array(device_handle, sensor_start_vga, ARRAY_SIZE(sensor_start_vga), taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, frame_width, frame_rate](async::TaskCallback<int> taskDoneCallback) {
+        async_set_frame_rate(device_handle, frame_width, frame_rate, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, bAutoGain, gain, exposure](async::TaskCallback<int> taskDoneCallback) {
+        async_set_autogain(device_handle, bAutoGain, gain, exposure, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, bAWB](async::TaskCallback<int> taskDoneCallback) {
+        async_set_auto_white_balance(device_handle, bAWB, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, gain](async::TaskCallback<int> taskDoneCallback) {
+        async_set_gain(device_handle, gain, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, hue](async::TaskCallback<int> taskDoneCallback) {
+        async_set_hue(device_handle, hue, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, exposure](async::TaskCallback<int> taskDoneCallback) {
+        async_set_exposure(device_handle, exposure, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, brightness](async::TaskCallback<int> taskDoneCallback) {
+        async_set_brightness(device_handle, brightness, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, contrast](async::TaskCallback<int> taskDoneCallback) {
+        async_set_contrast(device_handle, contrast, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, sharpness](async::TaskCallback<int> taskDoneCallback) {
+        async_set_sharpness(device_handle, sharpness, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, redBalance](async::TaskCallback<int> taskDoneCallback) {
+        async_set_red_balance(device_handle, redBalance, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, blueBalance](async::TaskCallback<int> taskDoneCallback) {
+        async_set_blue_balance(device_handle, blueBalance, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, greenBalance](async::TaskCallback<int> taskDoneCallback) {
+        async_set_green_balance(device_handle, greenBalance, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, bFlipH, bFlipV](async::TaskCallback<int> taskDoneCallback) {
+        async_set_flip(device_handle, bFlipH, bFlipV, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_set_led(device_handle, true, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, 0xe0, 0x00, taskDoneCallback); // start stream
+    });
+    taskChain->addTask([device_handle, processor](async::TaskCallback<int> taskDoneCallback) {
+        USBTransferRequest request;
+        memset(&request, 0, sizeof(USBTransferRequest));
+        request.request_type= _USBRequestType_StartBulkTransfer;
+        request.payload.start_bulk_transfer.usb_device_handle= device_handle;
+        request.payload.start_bulk_transfer.bAutoResubmit= true;
+        request.payload.start_bulk_transfer.in_flight_transfer_packet_count= NUM_TRANSFERS;
+        request.payload.start_bulk_transfer.transfer_packet_size= TRANSFER_SIZE;
+        request.payload.start_bulk_transfer.on_data_callback= PS3EyeVideoPacketProcessor::usbBulkTransferCallback_workerThread;
+        request.payload.start_bulk_transfer.transfer_callback_userdata= processor;
+
+        // Send a request to the USBDeviceManager to start a bulk transfer stream for video frames
+        USBDeviceManager::getInstance()->submitTransferRequest(
+            request, 
+            [taskDoneCallback](USBTransferResult &result) {
+                assert(result.result_type == _USBResultType_BulkTransfer);
+                log_usb_result_code("async_start_camera", result.payload.bulk_transfer.result_code); 
+                taskDoneCallback(async::OK, result.payload.bulk_transfer.result_code);
+            });
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
-    {
-        int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        {
+            int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
-        outCallback(outErrorCode, outResult);
-    });
+            delete taskChain;
+            outCallback(outErrorCode, outResult);
+        });
 }
 
 static void async_stop_camera(
     const t_usb_device_handle device_handle,
     async::TaskCallback<int> outCallback)
 {
-    async::TaskVector<int> tasks{
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback); // stop stream
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_set_led(device_handle, false, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            USBTransferRequest request;
-            memset(&request, 0, sizeof(USBTransferRequest));
-            request.request_type= _USBRequestType_CancelBulkTransfer;
-            request.payload.cancel_bulk_transfer.usb_device_handle= device_handle;
+    AsyncTaskChain *taskChain = new AsyncTaskChain;
 
-            // Send a request to the USBDeviceManager to stop the bulk transfer stream for video frames
-            USBDeviceManager::getInstance()->submitTransferRequest(
-                request, 
-                [taskDoneCallback](USBTransferResult &result) {
-                    assert(result.result_type == _USBResultType_BulkTransfer);
-                    log_usb_result_code("async_stop_camera", result.payload.bulk_transfer.result_code);
-                    taskDoneCallback(async::OK, result.payload.bulk_transfer.result_code);
-                });
-        }
-    };
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback); // stop stream
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_set_led(device_handle, false, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        USBTransferRequest request;
+        memset(&request, 0, sizeof(USBTransferRequest));
+        request.request_type= _USBRequestType_CancelBulkTransfer;
+        request.payload.cancel_bulk_transfer.usb_device_handle= device_handle;
+
+        // Send a request to the USBDeviceManager to stop the bulk transfer stream for video frames
+        USBDeviceManager::getInstance()->submitTransferRequest(
+            request, 
+            [taskDoneCallback](USBTransferResult &result) {
+                assert(result.result_type == _USBResultType_BulkTransfer);
+                log_usb_result_code("async_stop_camera", result.payload.bulk_transfer.result_code);
+                taskDoneCallback(async::OK, result.payload.bulk_transfer.result_code);
+            });
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
-    {
-        int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        {
+            int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
-        outCallback(outErrorCode, outResult);
-    });
+            delete taskChain;
+            outCallback(outErrorCode, outResult);
+        });
 }
 
 static void async_set_autogain(
@@ -1327,59 +1345,57 @@ static void async_set_autogain(
     uint8_t exposure,
     async::TaskCallback<int> outCallback)
 {
-    async::TaskVector<int> tasks;
-
     // Side-Effects valid for the duration of the task chain
-    struct TaskChainState
+    struct AsyncTaskChain_Autogain : AsyncTaskChain
     {
         uint8_t read_reg_0x64_result;
 
-        TaskChainState() : read_reg_0x64_result(0) {}
+        AsyncTaskChain_Autogain() : read_reg_0x64_result(0) {}
     };
-    TaskChainState *taskChainState = new TaskChainState;
+    AsyncTaskChain_Autogain *taskChain = new AsyncTaskChain_Autogain;
 
     if (bAutoGain) 
     {
-        tasks.push_back(
+        taskChain->addTask(
             [device_handle](async::TaskCallback<int> taskDoneCallback) {
                 async_sccb_reg_write(device_handle, 0x13, 0xf7, taskDoneCallback); //AGC,AEC,AWB ON
             });
-        tasks.push_back(
-            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+        taskChain->addTask(
+            [device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
                 async_sccb_reg_read(device_handle, 0x64, 
-                    [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
-                        taskChainState->read_reg_0x64_result= result;
+                    [taskChain, taskDoneCallback](async::ErrorCode error, int result) {
+                        taskChain->read_reg_0x64_result= result;
                         taskDoneCallback(error, result);
                     });
             });
-        tasks.push_back(
-            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-                async_sccb_reg_write(device_handle, 0x64, taskChainState->read_reg_0x64_result | 0x03, taskDoneCallback);
+        taskChain->addTask(
+            [device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+                async_sccb_reg_write(device_handle, 0x64, taskChain->read_reg_0x64_result | 0x03, taskDoneCallback);
             });
     }
     else 
     {
-        tasks.push_back(
+        taskChain->addTask(
             [device_handle](async::TaskCallback<int> taskDoneCallback) {
                 async_sccb_reg_write(device_handle, 0x13, 0xf0, taskDoneCallback); //AGC,AEC,AWB OFF
             });
-        tasks.push_back(
-            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
+        taskChain->addTask(
+            [device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
                 async_sccb_reg_read(device_handle, 0x64, 
-                    [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
-                        taskChainState->read_reg_0x64_result= result;
+                    [taskChain, taskDoneCallback](async::ErrorCode error, int result) {
+                        taskChain->read_reg_0x64_result= result;
                         taskDoneCallback(error, result);
                     });
             });
-        tasks.push_back(
-            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-                async_sccb_reg_write(device_handle, 0x64, taskChainState->read_reg_0x64_result & 0xFC, taskDoneCallback);
+        taskChain->addTask(
+            [device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+                async_sccb_reg_write(device_handle, 0x64, taskChain->read_reg_0x64_result & 0xFC, taskDoneCallback);
             });
-        tasks.push_back(
+        taskChain->addTask(
             [device_handle, gain](async::TaskCallback<int> taskDoneCallback) {
                 async_set_gain(device_handle, gain, taskDoneCallback);
             });
-        tasks.push_back(
+        taskChain->addTask(
             [device_handle, exposure](async::TaskCallback<int> taskDoneCallback) {
                 async_set_exposure(device_handle, exposure, taskDoneCallback);
             });
@@ -1388,12 +1404,12 @@ static void async_set_autogain(
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [taskChainState, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
     {
         int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
-        delete taskChainState;
+        delete taskChain;
         outCallback(outErrorCode, outResult);
     });
 }
@@ -1445,23 +1461,24 @@ static void async_set_exposure(
     unsigned char val, 
     async::TaskCallback<int> outCallback)
 {
-    async::TaskVector<int> tasks {
-        [device_handle, val](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write(device_handle, 0x08, val >> 7, taskDoneCallback);
-        },
-        [device_handle, val](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write(device_handle, 0x10, val << 1, taskDoneCallback);
-        },
-    };
+    AsyncTaskChain *taskChain = new AsyncTaskChain;
+
+    taskChain->addTask([device_handle, val](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write(device_handle, 0x08, val >> 7, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, val](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write(device_handle, 0x10, val << 1, taskDoneCallback);
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+            delete taskChain;
             outCallback(outErrorCode, outResult);
         });
 }
@@ -1471,23 +1488,24 @@ static void async_set_sharpness(
     unsigned char val, 
     async::TaskCallback<int> outCallback)
 {
-    async::TaskVector<int> tasks {
-        [device_handle, val](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write(device_handle, 0x91, val, taskDoneCallback);
-        },
-        [device_handle, val](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write(device_handle, 0x8E, val, taskDoneCallback);
-        },
-    };
+    AsyncTaskChain *taskChain = new AsyncTaskChain;
+
+    taskChain->addTask([device_handle, val](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write(device_handle, 0x91, val, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, val](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write(device_handle, 0x8E, val, taskDoneCallback);
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+            delete taskChain;
             outCallback(outErrorCode, outResult);
         });
 }
@@ -1546,40 +1564,37 @@ static void async_set_flip(
     bool vertical, 
     async::TaskCallback<int> outCallback)
 {
-    // Side-Effects valid for the duration of the task chain
-    struct TaskChainState
+    struct AsyncTaskChain_Flip : AsyncTaskChain
     {
         uint8_t read_reg_0x0C_result;
 
-        TaskChainState() : read_reg_0x0C_result(0) {}
+        AsyncTaskChain_Flip() : read_reg_0x0C_result(0) {}
     };
-    TaskChainState *taskChainState = new TaskChainState;
+    AsyncTaskChain_Flip *taskChain = new AsyncTaskChain_Flip;
 
-    async::TaskVector<int> tasks {
-        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_read(device_handle, 0x0C, 
-                [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
-                    taskChainState->read_reg_0x0C_result= result & ~0xC0;
-                    taskDoneCallback(error, result);
-                });
-        },
-        [device_handle, taskChainState, horizontal, vertical](async::TaskCallback<int> taskDoneCallback) {
-            uint8_t val= taskChainState->read_reg_0x0C_result;
-            if (!horizontal) val |= 0x40;
-            if (!vertical) val |= 0x80;
-            async_sccb_reg_write(device_handle, 0x0C, val, taskDoneCallback);
-        }
-    };
+    taskChain->addTask([device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_read(device_handle, 0x0C, 
+            [taskChain, taskDoneCallback](async::ErrorCode error, int result) {
+                taskChain->read_reg_0x0C_result= result & ~0xC0;
+                taskDoneCallback(error, result);
+            });
+    });
+    taskChain->addTask([device_handle, taskChain, horizontal, vertical](async::TaskCallback<int> taskDoneCallback) {
+        uint8_t val= taskChain->read_reg_0x0C_result;
+        if (!horizontal) val |= 0x40;
+        if (!vertical) val |= 0x80;
+        async_sccb_reg_write(device_handle, 0x0C, val, taskDoneCallback);
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [taskChainState, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
-            delete taskChainState;
+            delete taskChain;
             outCallback(outErrorCode, outResult);
         });
 }
@@ -1593,26 +1608,27 @@ static void async_set_frame_rate(
     uint8_t r11, r0d, re5;
     compute_frame_rate_settings(frame_width, frame_rate, &r11, &r0d, &re5);
 
-    async::TaskVector<int> tasks {
-        [device_handle, r11](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write(device_handle, 0x11, r11, taskDoneCallback);
-        },
-        [device_handle, r0d](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_reg_write(device_handle, 0x0d, r0d, taskDoneCallback);
-        },
-        [device_handle, re5](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0xe5, re5, taskDoneCallback);
-        }
-    };
+    AsyncTaskChain *taskChain = new AsyncTaskChain;
+
+    taskChain->addTask([device_handle, r11](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write(device_handle, 0x11, r11, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, r0d](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_reg_write(device_handle, 0x0d, r0d, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, re5](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, 0xe5, re5, taskDoneCallback);
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks, 
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        taskChain->tasks, 
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+            delete taskChain;
             outCallback(outErrorCode, outResult);
         });
 }
@@ -1623,32 +1639,33 @@ static void async_sccb_reg_write(
     uint8_t val, 
     async::TaskCallback<int> outCallback)
 {
-    async::TaskVector<int> tasks {
-        [device_handle, reg](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, OV534_REG_SUBADDR, reg, taskDoneCallback);
-        },
-        [device_handle, val](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, OV534_REG_WRITE, val, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, OV534_REG_OPERATION, OV534_OP_WRITE_3, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_check_status(device_handle, [taskDoneCallback](async::ErrorCode statusCheckErrorCode, int statusCheckResult)
-            {
-                taskDoneCallback((statusCheckResult == 1) ? async::OK : async::FAIL, statusCheckResult);
-            });
-        },
-    };
+    AsyncTaskChain *taskChain = new AsyncTaskChain;
+
+    taskChain->addTask([device_handle, reg](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, OV534_REG_SUBADDR, reg, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle, val](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, OV534_REG_WRITE, val, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, OV534_REG_OPERATION, OV534_OP_WRITE_3, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_check_status(device_handle, [taskDoneCallback](async::ErrorCode statusCheckErrorCode, int statusCheckResult)
+        {
+            taskDoneCallback((statusCheckResult == 1) ? async::OK : async::FAIL, statusCheckResult);
+        });
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks, 
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        taskChain->tasks, 
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+            delete taskChain;
             outCallback(outErrorCode, outResult);
         });
 }
@@ -1660,7 +1677,7 @@ static void async_sccb_reg_write_array(
     async::TaskCallback<int> outCallback)
 {
     // Side-Effects valid for the duration of the task chain
-    struct TaskChainState
+    struct TaskChainState 
     {
         const uint8_t (*data)[2];
         int len;
@@ -1741,44 +1758,45 @@ static void async_sccb_reg_read(
     uint16_t reg, 
     async::TaskCallback<int> outCallback)
 {
-    async::TaskVector<int> tasks{
-        [device_handle, reg](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, OV534_REG_SUBADDR, (uint8_t)reg, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, OV534_REG_OPERATION, OV534_OP_WRITE_2, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_check_status(device_handle, [taskDoneCallback](async::ErrorCode statusCheckErrorCode, int statusCheckResult)
-            {
-                taskDoneCallback((statusCheckResult == 1) ? async::OK : async::FAIL, statusCheckResult);
-            });
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, OV534_REG_OPERATION, OV534_OP_READ_2, taskDoneCallback);
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_sccb_check_status(device_handle, [taskDoneCallback](async::ErrorCode statusCheckErrorCode, int statusCheckResult)
-            {
-                taskDoneCallback((statusCheckResult == 1) ? async::OK : async::FAIL, statusCheckResult);
-            });
-        },
-        [device_handle](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_read(device_handle, OV534_REG_READ, taskDoneCallback);
-        },
-    };
+    AsyncTaskChain *taskChain = new AsyncTaskChain();
+
+    taskChain->addTask([device_handle, reg](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, OV534_REG_SUBADDR, (uint8_t)reg, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, OV534_REG_OPERATION, OV534_OP_WRITE_2, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_check_status(device_handle, [taskDoneCallback](async::ErrorCode statusCheckErrorCode, int statusCheckResult)
+        {
+            taskDoneCallback((statusCheckResult == 1) ? async::OK : async::FAIL, statusCheckResult);
+        });
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, OV534_REG_OPERATION, OV534_OP_READ_2, taskDoneCallback);
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_sccb_check_status(device_handle, [taskDoneCallback](async::ErrorCode statusCheckErrorCode, int statusCheckResult)
+        {
+            taskDoneCallback((statusCheckResult == 1) ? async::OK : async::FAIL, statusCheckResult);
+        });
+    });
+    taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_read(device_handle, OV534_REG_READ, taskDoneCallback);
+    });
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             // NOTE: If the task chain succeeded, 
             // the final result value will be the value read from camera register
             // via the ov534_reg_read task.
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
+            delete taskChain;
             outCallback(outErrorCode, outResult);
         });
 }
@@ -1829,8 +1847,10 @@ static void async_sccb_check_status(
                     {
                     case 0x00:
                         taskChainState->sccbStatusResult = 1;
+                        break;
                     case 0x04:
                         taskChainState->sccbStatusResult = 0;
+                        break;
                     case 0x03:
                         break;
                     default:
@@ -2006,74 +2026,72 @@ static void async_ov534_set_led(
     async::TaskCallback<int> outCallback)
 {
     // Side-Effects valid for the duration of the task chain
-    struct TaskChainState
+    struct AsyncTaskChain_SetLED : AsyncTaskChain
     {
         uint8_t read_reg_result;
 
-        TaskChainState(): read_reg_result(0)
+        AsyncTaskChain_SetLED() 
+            : AsyncTaskChain()
+            , read_reg_result(0)
         {}
     };
-    TaskChainState *taskChainState = new TaskChainState();
+    AsyncTaskChain_SetLED *taskChain = new AsyncTaskChain_SetLED();
 
-    async::TaskVector<int> tasks {
-        // Change register value 0x21
-        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_read(
-                device_handle, 0x21, 
-                [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
-                    taskChainState->read_reg_result= result | 0x80;
-                    taskDoneCallback(error, result);
-                });
-        },
-        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0x21, taskChainState->read_reg_result, taskDoneCallback);
-        },
-        // Change register value 0x23
-        [device_handle, taskChainState, bLedOn](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_read(
-                device_handle, 0x23, 
-                [taskChainState, taskDoneCallback, bLedOn](async::ErrorCode error, int result) {
-                    if (bLedOn)
-                        taskChainState->read_reg_result= result | 0x80;
-                    else
-                        taskChainState->read_reg_result= result & ~0x80;
-                    taskDoneCallback(error, result);
-                });
-        },
-        [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-            async_ov534_reg_write(device_handle, 0x23, taskChainState->read_reg_result, taskDoneCallback);
-        },
-    };
+    // Change register value 0x21
+    taskChain->addTask([device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_read(
+            device_handle, 0x21, 
+            [taskChain, taskDoneCallback](async::ErrorCode error, int result) {
+                taskChain->read_reg_result= result | 0x80;
+                taskDoneCallback(error, result);
+            });
+    });
+    taskChain->addTask([device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, 0x21, taskChain->read_reg_result, taskDoneCallback);
+    });
+    // Change register value 0x23
+    taskChain->addTask([device_handle, taskChain, bLedOn](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_read(
+            device_handle, 0x23, 
+            [taskChain, taskDoneCallback, bLedOn](async::ErrorCode error, int result) {
+                if (bLedOn)
+                    taskChain->read_reg_result= result | 0x80;
+                else
+                    taskChain->read_reg_result= result & ~0x80;
+                taskDoneCallback(error, result);
+            });
+    });
+    taskChain->addTask([device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+        async_ov534_reg_write(device_handle, 0x23, taskChain->read_reg_result, taskDoneCallback);
+    });
 
     if (!bLedOn)
     {
-        tasks.push_back(
-            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-                async_ov534_reg_read(
-                    device_handle, 0x21, 
-                    [taskChainState, taskDoneCallback](async::ErrorCode error, int result) {
-                        taskChainState->read_reg_result= result & ~0x80;
-                        taskDoneCallback(error, result);
-                    });
-            });
-        tasks.push_back(
-            [device_handle, taskChainState](async::TaskCallback<int> taskDoneCallback) {
-                async_ov534_reg_write(device_handle, 0x21, taskChainState->read_reg_result, taskDoneCallback);
-            });
+        taskChain->addTask([device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_read(
+                device_handle, 0x21, 
+                [taskChain, taskDoneCallback](async::ErrorCode error, int result) {
+                    taskChain->read_reg_result= result & ~0x80;
+                    taskDoneCallback(error, result);
+                });
+        });
+        taskChain->addTask([device_handle, taskChain](async::TaskCallback<int> taskDoneCallback) {
+            async_ov534_reg_write(device_handle, 0x21, taskChain->read_reg_result, taskDoneCallback);
+        });
     }
 
     // Evaluate tasks in order
     // Pass outCallback the final error code and result of the task chain
     async::series<int>(
-        tasks,
-        [taskChainState, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
+        taskChain->tasks,
+        [taskChain, outCallback](async::ErrorCode outErrorCode, std::vector<int> results)
         {
             // NOTE: If the task chain succeeded, 
             // the final result value will be the value read from camera register
             // via the ov534_reg_read task.
             int outResult = (results.size() > 0) ? results[results.size() - 1] : 0;
 
-            delete taskChainState;
+            delete taskChain;
             outCallback(outErrorCode, outResult);
         });
 }
