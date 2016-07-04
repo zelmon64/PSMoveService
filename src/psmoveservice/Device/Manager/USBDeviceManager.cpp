@@ -1,5 +1,6 @@
 //-- includes -----
 #include "USBDeviceManager.h"
+#include "AsyncRequest.h"
 #include "USBDeviceInfo.h"
 #include "USBBulkTransferBundle.h"
 #include "ServerLog.h"
@@ -76,28 +77,49 @@ public:
         // Get a list of all of the available USB devices that are on the white-list
         rebuildFilteredDeviceList();
 
-        // Start the worker thread to process async requests
-        startWorkerThread();
-
         return bSuccess;
     }
 
     void update()
     {
-        ResultState resultState;
-
-        // Process all pending results
-        while (result_queue.pop(resultState))
+        // If the thread terminated, reset the started and exited flags
+        if (m_exit_signaled)
         {
-            // Fire the callback on the result
-            resultState.callback(resultState.result);
+            m_thread_started= false;
+            m_exit_signaled= false;
+        }
+
+        if (!m_thread_started)
+        {
+            // If the thread isn't running, process the request as well as the results
+            while(processRequests())
+            {
+                processResults();
+            }
+
+            // If there are bulk transfers now active, start up the worker thread to manage them
+            if (m_active_bulk_transfer_bundles.size() > 0)
+            {
+                startWorkerThread();
+            }
+        }
+        else
+        {
+            // If the thread is running, only process the results since the thread is handling the requests
+            processResults();
         }
     }
 
     void shutdown()
     {
         // Shutdown any async transfers
-        stopWorkerThread();
+        if (m_thread_started)
+        {
+            stopWorkerThread();
+        }
+
+        // Cleanup any requests
+        requestProcessingTeardown();
 
         if (m_usb_context != nullptr)
         {
@@ -316,51 +338,71 @@ protected:
         }
     }
 
-    void workerThreadFunc()
+    bool processRequests()
     {
-        ServerUtility::set_current_thread_name("USB Async Worker Thread");
+        bool bHadRequests= false;
 
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 50 * 1000; // ms
-
-        // Stay in the message loop until asked to exit by the main thread
-        while (!m_exit_signaled)
+        // Process incoming USB transfer requests
+        RequestState requestState;
+        while (request_queue.pop(requestState))
         {
-            // Process incoming USB transfer requests
-            RequestState requestState;
-            while (request_queue.pop(requestState))
+            switch (requestState.request.request_type)
             {
-                switch (requestState.request.request_type)
-                {
-                case eUSBTransferRequestType::_USBRequestType_ControlTransfer:
-                    handleControlTransferRequest(requestState);
-                    break;
-                case eUSBTransferRequestType::_USBRequestType_StartBulkTransfer:
-                    handleStartBulkTransferRequest(requestState);
-                    break;
-                case eUSBTransferRequestType::_USBRequestType_CancelBulkTransfer:
-                    handleCancelBulkTransferRequest(requestState);
-                    break;
-                }
+            case eUSBTransferRequestType::_USBRequestType_ControlTransfer:
+                handleControlTransferRequest(requestState);
+                break;
+            case eUSBTransferRequestType::_USBRequestType_StartBulkTransfer:
+                handleStartBulkTransferRequest(requestState);
+                break;
+            case eUSBTransferRequestType::_USBRequestType_CancelBulkTransfer:
+                handleCancelBulkTransferRequest(requestState);
+                break;
             }
 
-            if (m_active_bulk_transfer_bundles.size() > 0 || 
-                m_canceled_bulk_transfer_bundles.size() > 0 ||
-                m_active_control_transfers > 0)
+            bHadRequests= true;
+        }
+
+        if (m_active_bulk_transfer_bundles.size() > 0 || 
+            m_canceled_bulk_transfer_bundles.size() > 0 ||
+            m_active_control_transfers > 0)
+        {
+            int poll_count = 0;
+
+            // If we have a control transfer pending, 
+            // keep polling until we get the result back
+            while (poll_count == 0 || m_active_control_transfers > 0)
             {
+                struct timeval tv;
+                tv.tv_sec = 0;
+                tv.tv_usec = 50 * 1000; // ms
+
                 // Give libusb a change to process transfer requests and post events
                 libusb_handle_events_timeout_completed(m_usb_context, &tv, NULL);
 
-                // Cleanup any requests that no longer have any pending cancellations
-                cleanupCanceledRequests();
+                ++poll_count;
             }
-            else
-            {
-                ServerUtility::sleep_ms(100);
-            }
+
+            // Cleanup any requests that no longer have any pending cancellations
+            cleanupCanceledRequests();
         }
 
+        return bHadRequests;
+    }
+
+    void processResults()
+    {
+        ResultState resultState;
+
+        // Process all pending results
+        while (result_queue.pop(resultState))
+        {
+            // Fire the callback on the result
+            resultState.callback(resultState.result);
+        }
+    }
+
+    void requestProcessingTeardown()
+    {
         // Drain the request queue
         while (request_queue.pop());
 
@@ -376,11 +418,33 @@ protected:
         // Wait for the canceled bulk transfers and control transfers to exit
         while (m_canceled_bulk_transfer_bundles.size() > 0 && m_active_control_transfers > 0)
         {
+            struct timeval tv;
+            tv.tv_sec = 0;
+            tv.tv_usec = 50 * 1000; // ms
+
             // Give libusb a change to process the cancellation requests
             libusb_handle_events_timeout_completed(m_usb_context, &tv, NULL);
 
             // Cleanup any requests that no longer have any pending cancellations
             cleanupCanceledRequests();
+        }
+    }
+
+    void workerThreadFunc()
+    {
+        ServerUtility::set_current_thread_name("USB Async Worker Thread");
+
+        // Stay in the message loop until asked to exit by the main thread
+        while (!m_exit_signaled)
+        {
+            processRequests();
+
+            // Shut the thread down if we aren't managing any bulk transfers
+            if (m_active_bulk_transfer_bundles.size() == 0 &&
+                m_canceled_bulk_transfer_bundles.size() == 0)
+            {
+                m_exit_signaled= true;
+            }
         }
     }
 
@@ -406,6 +470,22 @@ protected:
         LibUSBDeviceState *state = get_libusb_state_from_handle(request.usb_device_handle);
         eUSBResultCode result_code;
         bool bSuccess= true;
+
+#if defined(DEBUG_USBDEVICEMANAGER)
+        if ((request.bmRequestType & LIBUSB_ENDPOINT_DIR_MASK) == LIBUSB_ENDPOINT_OUT)
+        {
+            debug("USBMgr REQUEST: control transfer write - dev: %d, reg: 0x%X, value: 0x%x\n", 
+                requestState.request.payload.control_transfer.usb_device_handle,
+                requestState.request.payload.control_transfer.wIndex,
+                requestState.request.payload.control_transfer.data[0]);
+        }
+        else
+        {
+            debug("USBMgr REQUEST: control transfer read - dev: %d, reg: 0x%X\n", 
+                requestState.request.payload.control_transfer.usb_device_handle,
+                requestState.request.payload.control_transfer.wIndex);
+        }
+#endif
 
         if (state != nullptr)
         {
@@ -571,6 +651,25 @@ protected:
         default:
             result.payload.control_transfer.result_code = _USBResultCode_GeneralError;
         }
+
+#if defined(DEBUG_USBDEVICEMANAGER)
+        if ((request->bmRequestType & LIBUSB_ENDPOINT_DIR_MASK) == LIBUSB_ENDPOINT_OUT)
+        {
+            debug("USBMgr RESULT: control transfer write - dev: %d, reg: 0x%X, value: 0x%x -> %s\n", 
+                requestStateOnHeap->request.payload.control_transfer.usb_device_handle,
+                request->wIndex,
+                request->data[0],
+                transfer->status == LIBUSB_TRANSFER_COMPLETED ? "SUCCESS" : "FAILED");
+        }
+        else
+        {
+            debug("USBMgr RESULT: control transfer read - dev: %d, reg: 0x%X -> 0x%X (%s)\n", 
+                requestStateOnHeap->request.payload.control_transfer.usb_device_handle,
+                request->wIndex,
+                result.payload.control_transfer.data,
+                transfer->status == LIBUSB_TRANSFER_COMPLETED ? "SUCCESS" : "FAILED");
+        }
+#endif
 
         // Add the result to the outgoing result queue
         USBDeviceManager::getInstance()->getImplementation()->postUSBTransferResult(result, requestStateOnHeap->callback);
@@ -743,11 +842,18 @@ protected:
     {
         if (m_thread_started)
         {
-            SERVER_LOG_INFO("USBAsyncRequestManager::startup") << "Stopping USB event thread...";
-            m_exit_signaled = true;
-            m_worker_thread.join();
+            if (!m_exit_signaled)
+            {
+                SERVER_LOG_INFO("USBAsyncRequestManager::startup") << "Stopping USB event thread...";
+                m_exit_signaled = true;
+                m_worker_thread.join();
+                SERVER_LOG_INFO("USBAsyncRequestManager::startup") << "USB event thread stopped";
+            }
+            else
+            {
+                SERVER_LOG_INFO("USBAsyncRequestManager::startup") << "USB event thread already stopped";
+            }
 
-            SERVER_LOG_INFO("USBAsyncRequestManager::startup") << "USB event thread stopped";
             m_thread_started = false;
             m_exit_signaled = false;
         }
@@ -881,6 +987,7 @@ protected:
 private:
     // Multithreaded state
     libusb_context* m_usb_context;
+    bool m_bUseMultithreading;
     std::atomic_bool m_exit_signaled;
     boost::lockfree::spsc_queue<RequestState, boost::lockfree::capacity<128> > request_queue;
     boost::lockfree::spsc_queue<ResultState, boost::lockfree::capacity<128> > result_queue;

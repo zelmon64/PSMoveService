@@ -52,6 +52,7 @@
 
 //-- includes -----
 #include "PS3EyeLibUSBCapture.h"
+#include "AsyncRequest.h"
 #include "ServerLog.h"
 #include "ServerUtility.h"
 #include "USBDeviceManager.h"
@@ -61,8 +62,6 @@
 #include <iomanip>
 #include <string>
 #include <deque>
-
-#include "async/async.hpp"
 
 //-- constants -----
 #define TRANSFER_SIZE		16384
@@ -418,20 +417,6 @@ struct NamedAsyncTask
 {
     std::string task_name;
     async::Task<int> task_func;
-};
-
-//-- USBAsyncTaskQueue -----
-struct AsyncTaskChain
-{
-    async::TaskVector<int> tasks;
-
-    AsyncTaskChain() : tasks()
-    {}
-
-    void addTask(const async::Task<int> &task)
-    {
-        tasks.push_back(task);
-    }
 };
 
 //-- USBAsyncTaskQueue -----
@@ -1163,7 +1148,7 @@ static void async_init_camera(
         async_sccb_reg_write_array(device_handle, ov772x_reg_initdata, ARRAY_SIZE(ov772x_reg_initdata), taskDoneCallback);
     });
     taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
-        async_sccb_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback);
+        async_ov534_reg_write(device_handle, 0xe0, 0x09, taskDoneCallback);
     });
     taskChain->addTask([device_handle](async::TaskCallback<int> taskDoneCallback) {
         async_ov534_set_led(device_handle, false, taskDoneCallback);
@@ -1210,7 +1195,7 @@ static void async_start_camera(
         if (frame_width == 320) // 320x240
             async_ov534_reg_write_array(device_handle, bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga), taskDoneCallback);
         else // 640x480 
-            async_ov534_reg_write_array(device_handle, bridge_start_qvga, ARRAY_SIZE(bridge_start_qvga), taskDoneCallback);
+            async_ov534_reg_write_array(device_handle, bridge_start_vga, ARRAY_SIZE(bridge_start_vga), taskDoneCallback);
     });
     taskChain->addTask([device_handle, frame_width](async::TaskCallback<int> taskDoneCallback) {
         if (frame_width == 320) // 320x240

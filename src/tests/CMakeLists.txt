@@ -151,10 +151,12 @@ list(APPEND TEST_CAMERA_INCL_DIRS ${ROOT_DIR}/thirdparty/asyncpp/)
     
 # USB Device Management    
 list(APPEND TEST_CAMERA_INCL_DIRS 
+    ${ROOT_DIR}/src/psmoveservice/Async
     ${ROOT_DIR}/src/psmoveservice/Device/Manager
     ${ROOT_DIR}/src/psmoveservice/Device/USB
     ${ROOT_DIR}/src/psmoveservice/Server)
 list(APPEND TEST_CAMERA_SRC
+    ${ROOT_DIR}/src/psmoveservice/Async/AsyncRequest.h
     ${ROOT_DIR}/src/psmoveservice/Server/ServerLog.h
     ${ROOT_DIR}/src/psmoveservice/Server/ServerLog.cpp
     ${ROOT_DIR}/src/psmoveservice/Server/ServerUtility.h

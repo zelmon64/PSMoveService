@@ -15,7 +15,7 @@ enum eUSBTransferRequestType
 enum eUSBTransferResultType
 {
     _USBResultType_ControlTransfer,
-    _USBResultType_BulkTransfer,
+    _USBResultType_BulkTransfer
 };
 
 enum eUSBResultCode
