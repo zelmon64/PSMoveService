@@ -42,7 +42,7 @@ ENDIF()
 # Source files for PSMoveService
 file(GLOB PSMOVESERVICE_CONFIG_SRC
     "${CMAKE_CURRENT_LIST_DIR}/PSMoveConfig/*.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/PSMoveConfig/*.h"    
+    "${CMAKE_CURRENT_LIST_DIR}/PSMoveConfig/*.h"
 )
 source_group("Config" FILES ${PSMOVESERVICE_CONFIG_SRC})
 
@@ -58,43 +58,45 @@ source_group("Controller" FILES ${PSMOVESERVICE_CONTROLLER_SRC})
 
 file(GLOB PSMOVESERVICE_DEVICE_ENUM_SRC
     "${CMAKE_CURRENT_LIST_DIR}/Device/Enumerator/*.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/Device/Enumerator/*.h"    
+    "${CMAKE_CURRENT_LIST_DIR}/Device/Enumerator/*.h"
 )
 source_group("Device\\Enumerator" FILES ${PSMOVESERVICE_DEVICE_ENUM_SRC})
 
 file(GLOB PSMOVESERVICE_DEVICE_INT_SRC
     "${CMAKE_CURRENT_LIST_DIR}/Device/Interface/*.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/Device/Interface/*.h"    
+    "${CMAKE_CURRENT_LIST_DIR}/Device/Interface/*.h"
 )
 source_group("Device\\Interface" FILES ${PSMOVESERVICE_DEVICE_INT_SRC})
 
 file(GLOB PSMOVESERVICE_DEVICE_MGR_SRC
     "${CMAKE_CURRENT_LIST_DIR}/Device/Manager/*.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/Device/Manager/*.h"    
+    "${CMAKE_CURRENT_LIST_DIR}/Device/Manager/*.h"
 )
 source_group("Device\\Manager" FILES ${PSMOVESERVICE_DEVICE_MGR_SRC})
 
 file(GLOB PSMOVESERVICE_DEVICE_USB_SRC
     "${CMAKE_CURRENT_LIST_DIR}/Device/USB/*.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/Device/USB/*.h"    
+    "${CMAKE_CURRENT_LIST_DIR}/Device/USB/*.h"
 )
 source_group("Device\\USB" FILES ${PSMOVESERVICE_DEVICE_USB_SRC})
 
 file(GLOB PSMOVESERVICE_DEVICE_VIEW_SRC
     "${CMAKE_CURRENT_LIST_DIR}/Device/View/*.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/Device/View/*.h"    
+    "${CMAKE_CURRENT_LIST_DIR}/Device/View/*.h"
 )
 source_group("Device\\View" FILES ${PSMOVESERVICE_DEVICE_VIEW_SRC})
 
 file(GLOB PSMOVESERVICE_HMD_SRC
     "${CMAKE_CURRENT_LIST_DIR}/MorpheusHMD/*.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/MorpheusHMD/*.h"
+    "${CMAKE_CURRENT_LIST_DIR}/SingleBulbHMD/*.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/SingleBulbHMD/*.h"
 )
 source_group("HMD" FILES ${PSMOVESERVICE_HMD_SRC})
 
 file(GLOB PSMOVESERVICE_FILTER_SRC
     "${CMAKE_CURRENT_LIST_DIR}/Filter/*.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/Filter/*.h"        
+    "${CMAKE_CURRENT_LIST_DIR}/Filter/*.h"
 )
 source_group("Filter" FILES ${PSMOVESERVICE_FILTER_SRC})
 
@@ -122,7 +124,7 @@ set(PSMOVESERVICE_SRC
     ${PSMOVESERVICE_DEVICE_VIEW_SRC}
     ${PSMOVESERVICE_HMD_SRC}
     ${PSMOVESERVICE_FILTER_SRC}
-    ${PSMOVESERVICE_SERVER_SRC} 
+    ${PSMOVESERVICE_SERVER_SRC}
     ${PSMOVESERVICE_TRACKER_SRC}
 )
 
@@ -142,6 +144,7 @@ list(APPEND PSMOVE_SERVICE_INCL_DIRS
     ${CMAKE_CURRENT_LIST_DIR}/PSMoveTracker
     ${CMAKE_CURRENT_LIST_DIR}/PSMoveTracker/PSEye
     ${CMAKE_CURRENT_LIST_DIR}/Server
+    ${CMAKE_CURRENT_LIST_DIR}/SingleBulbHMD
 )
 
 # Eigen math library
@@ -285,7 +288,7 @@ IF(MSVC)
 set_target_properties(PSMoveService PROPERTIES LINK_FLAGS "/level='requireAdministrator' /uiAccess='false'")
 ENDIF()
 
-# Install    
+# Install
 IF(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
     install(TARGETS PSMoveService
         RUNTIME DESTINATION ${ROOT_DIR}/${ARCH_LABEL}/bin
@@ -294,7 +297,7 @@ IF(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
     IF(${ISWIN32})
         install(DIRECTORY "${ROOT_DIR}/thirdparty/CLEYE/x86/bin/"
             DESTINATION ${ROOT_DIR}/Win32/bin
-            FILES_MATCHING PATTERN "*.dll")    
+            FILES_MATCHING PATTERN "*.dll")
     ENDIF()#ISWIN32
 ELSE() #Linux/Darwin
 ENDIF()
