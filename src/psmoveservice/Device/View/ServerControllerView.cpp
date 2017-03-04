@@ -13,6 +13,7 @@
 #include "PSDualShock4Controller.h"
 #include "PSMoveController.h"
 #include "PSNaviController.h"
+#include "SingleBulbHMD.h"
 #include "PSMoveProtocolInterface.h"
 #include "PSMoveProtocol.pb.h"
 #include "ServerUtility.h"
@@ -149,7 +150,21 @@ bool ServerControllerView::allocate_device_interface(
 
             m_multicam_pose_estimation = new ControllerOpticalPoseEstimation();
             m_multicam_pose_estimation->clear();
-        } break;
+        } break;/*
+	case CommonDeviceState::SingleBulb:
+	{
+		//m_device = new SingleBulbHMD();
+		m_tracker_pose_estimations = new ControllerOpticalPoseEstimation[TrackerManager::k_max_devices];
+		m_pose_filter = nullptr; // no pose filter until the device is opened
+
+		for (int tracker_index = 0; tracker_index < TrackerManager::k_max_devices; ++tracker_index)
+		{
+			m_tracker_pose_estimations[tracker_index].clear();
+		}
+
+		m_multicam_pose_estimation = new ControllerOpticalPoseEstimation();
+		m_multicam_pose_estimation->clear();
+	} break;//*/
     default:
         break;
     }

@@ -1,5 +1,5 @@
-#ifndef PSMOVE_CONTROLLER_H
-#define PSMOVE_CONTROLLER_H
+#ifndef SINGLEBULB_HMD_H
+#define SINGLEBULB_HMD_H
 
 #include "PSMoveConfig.h"
 #include "DeviceEnumerator.h"
@@ -10,8 +10,9 @@
 #include <array>
 #include <deque>
 #include <chrono>
-/*
-struct PSMoveHIDDetails {
+
+struct SingleBulbHIDDetails {
+	/*
 	int vendor_id;
 	int product_id;
     std::string Device_path;
@@ -20,7 +21,8 @@ struct PSMoveHIDDetails {
     hid_device *Handle_addr; // only needed by Win > 8.1, otherwise ignored.
     std::string Bt_addr;      // The bluetooth address of the controller
     std::string Host_bt_addr; // The bluetooth address of the adapter registered with the controller
-};*/
+	*/
+};
 
 //struct PSMoveDataInput;  // See .cpp for full declaration
 
@@ -149,10 +151,10 @@ public:
 	// The assigned tracking color for this controller
 	eCommonTrackingColorID tracking_color_id;
 };
-/*
+
 // https://code.google.com/p/moveonpc/wiki/InputReport
-struct PSMoveControllerState : public CommonControllerState
-{
+struct SingleBulbHMDState : public CommonControllerState
+{/*
     int RawSequence;                               // 4-bit (1..16).
                                                 // Sometimes frames are dropped.
     
@@ -180,10 +182,10 @@ struct PSMoveControllerState : public CommonControllerState
     std::array<float, 3> CalibratedMag;                       // One frame of 3 dimensions
 
     int TempRaw;
-
+	*/
     //TODO: high-precision timestamp. Need to do in hidapi?
     
-    PSMoveControllerState()
+	SingleBulbHMDState()
     {
         clear();
     }
@@ -192,10 +194,10 @@ struct PSMoveControllerState : public CommonControllerState
     {
         CommonControllerState::clear();
 
+		DeviceType = SingleBulb;
+		/*
         RawSequence = 0;
         RawTimeStamp = 0;
-
-        DeviceType = PSMove;
 
         Triangle = Button_UP;
         Circle = Button_UP;
@@ -219,9 +221,9 @@ struct PSMoveControllerState : public CommonControllerState
         }};
         CalibratedMag = {{0, 0, 0}};
 
-        TempRaw= 0;
+        TempRaw= 0;*/
     }
-};*/
+};
 
 class SingleBulbHMD : public IControllerInterface {
 public:
@@ -240,23 +242,23 @@ public:
     virtual void close() override;
     //virtual long getMaxPollFailureCount() const override;
     virtual CommonDeviceState::eDeviceType getDeviceType() const override;
-    //virtual const CommonDeviceState * getState(int lookBack = 0) const override;
+    virtual const CommonDeviceState * getState(int lookBack = 0) const override;
     /*
     // -- IControllerInterface
     virtual bool setHostBluetoothAddress(const std::string &address) override;
 	virtual bool setTrackingColorID(const eCommonTrackingColorID tracking_color_id) override;
-    virtual bool getIsBluetooth() const override;
     virtual std::string getUSBDevicePath() const override;
 	virtual int getVendorID() const override;
 	virtual int getProductID() const override;
     virtual std::string getAssignedHostBluetoothAddress() const override;
     virtual std::string getSerial() const override;
-    virtual const std::tuple<unsigned char, unsigned char, unsigned char> getColour() const override;
 	virtual float getIdentityForwardDegrees() const override;
 	*/
+    virtual bool getIsBluetooth() const override;
     virtual void getTrackingShape(CommonDeviceTrackingShape &outTrackingShape) const override;
 	virtual bool getTrackingColorID(eCommonTrackingColorID &out_tracking_color_id) const override;
 	virtual float getPredictionTime() const override;
+    virtual const std::tuple<unsigned char, unsigned char, unsigned char> getColour() const override;
 
     // -- Getters
     inline const SingleBulbHMDConfig *getConfig() const
@@ -265,19 +267,19 @@ public:
     { return &cfg; }
 	/*
     float getTempCelsius() const;
-    static CommonDeviceState::eDeviceType getDeviceTypeStatic()
-    { return CommonDeviceState::PSMove; }
-	bool getSupportsMagnetometer() const
-	{ return SupportsMagnetometer; }        
     const unsigned long getLEDPWMFrequency() const
     { return LedPWMF; }
-    *
+    */
+    static CommonDeviceState::eDeviceType getDeviceTypeStatic()
+    { return CommonDeviceState::SingleBulb; }
+	bool getSupportsMagnetometer() const
+	{ return SupportsMagnetometer; }      
     // -- Setters
     bool setLED(unsigned char r, unsigned char g, unsigned char b); // 0x00..0xff. TODO: vec3
-    bool setLEDPWMFrequency(unsigned long freq);    // 733..24e6
-    bool setRumbleIntensity(unsigned char value);
-	bool enableDFUMode(); // Device Firmware Update mode
-	*/
+    //bool setLEDPWMFrequency(unsigned long freq);    // 733..24e6
+    //bool setRumbleIntensity(unsigned char value);
+	//bool enableDFUMode(); // Device Firmware Update mode
+	
 private:    
     //bool getBTAddress(std::string& host, std::string& controller);
     //void loadCalibration();                         // Use USB or file if on BT
@@ -288,19 +290,21 @@ private:
     // Constant while a controller is open
 	SingleBulbHMDConfig cfg;
     //PSMoveHIDDetails HIDDetails;
-    //bool IsBluetooth;                               // true if valid serial number on device opening
-	//bool SupportsMagnetometer;                      // true if controller emits valid magnetometer data
-	/*
+    bool IsBluetooth;                               // true if valid serial number on device opening
+	bool SupportsMagnetometer;                      // true if controller emits valid magnetometer data
+	
     // Cached Setter State
     unsigned char LedR, LedG, LedB;
+	/*
     unsigned char Rumble;
     unsigned long LedPWMF;
+	*/
     bool bWriteStateDirty;
-    std::chrono::time_point<std::chrono::high_resolution_clock> lastWriteStateTime;
-	*
+    //std::chrono::time_point<std::chrono::high_resolution_clock> lastWriteStateTime;
+	
     // Read Controller State
-    int NextPollSequenceNumber;
-    std::deque<PSMoveControllerState> ControllerStates;
-    PSMoveDataInput* InData;  */                      // Buffer to copy hidapi reports into
+    std::deque<SingleBulbHMDState> ControllerStates;
+    //int NextPollSequenceNumber;
+    //PSMoveDataInput* InData;                        // Buffer to copy hidapi reports into
 };
 #endif // PSMOVE_CONTROLLER_H

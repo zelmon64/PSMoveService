@@ -372,14 +372,14 @@ PSMoveControllerConfig::getMegnetometerEllipsoid(struct EigenFitEllipsoid *out_e
 }
 */
 // -- Single Bulb HMD -----
-SingleBulbHMD::SingleBulbHMD() /*
+SingleBulbHMD::SingleBulbHMD()
     : LedR(0)
     , LedG(0)
     , LedB(0)
-    , Rumble(0)
+    //, Rumble(0)
     , bWriteStateDirty(false)
-    , NextPollSequenceNumber(0)
-	, SupportsMagnetometer(false)*/
+    //, NextPollSequenceNumber(0)
+	, SupportsMagnetometer(false)
 {/*
 	HIDDetails.vendor_id = -1;
 	HIDDetails.product_id = -1;
@@ -388,14 +388,14 @@ SingleBulbHMD::SingleBulbHMD() /*
     
     InData = new PSMoveDataInput;
     InData->type = PSMove_Req_GetInput;
-	*
+	*/
     // Make sure there is an initial empty state in the tracker queue
     {     
 		SingleBulbHMDState empty_state;
 
         empty_state.clear();
         ControllerStates.push_back(empty_state);
-    }*/
+    }
 }
 
 SingleBulbHMD::~SingleBulbHMD()
@@ -582,6 +582,8 @@ bool SingleBulbHMD::open(
     }
 
     return success;*/
+	const SingleBulbHMDState *ControllerState = static_cast<const SingleBulbHMDState *>(getState());
+	IsBluetooth = true;
     return true;
 }
 
@@ -706,13 +708,13 @@ PSMoveController::matchesDeviceEnumerator(const DeviceEnumerator *enumerator) co
 
     return matches;
 }
-
+#endif
 bool 
-PSMoveController::getIsBluetooth() const
+SingleBulbHMD::getIsBluetooth() const
 { 
     return IsBluetooth; 
 }
-
+#if 0
 bool
 PSMoveController::getIsReadyToPoll() const
 {
@@ -759,7 +761,7 @@ SingleBulbHMD::getIsOpen() const
 CommonDeviceState::eDeviceType
 SingleBulbHMD::getDeviceType() const
 {
-    return CommonDeviceState::Bulb;
+    return CommonDeviceState::SingleBulb;
 }
 #if 0
 bool
@@ -1219,9 +1221,9 @@ PSMoveController::poll()
 
     return result;
 }
-
+#endif
 const CommonDeviceState * 
-PSMoveController::getState(
+SingleBulbHMD::getState(
     int lookBack) const
 {
     const int queueSize= static_cast<int>(ControllerStates.size());
@@ -1230,13 +1232,13 @@ PSMoveController::getState(
 
     return result;
 }
-#endif 
-/*
+
+
 const std::tuple<unsigned char, unsigned char, unsigned char>
 SingleBulbHMD::getColour() const
 {
     return std::make_tuple(LedR, LedG, LedB);
-}*/
+}
 
 void 
 SingleBulbHMD::getTrackingShape(CommonDeviceTrackingShape &outTrackingShape) const
@@ -1250,7 +1252,7 @@ SingleBulbHMD::getTrackingColorID(eCommonTrackingColorID &out_tracking_color_id)
 {
 	bool bSuccess = false;
 
-	if (getIsOpen() && getIsBluetooth())
+	//if (getIsOpen() && getIsBluetooth())
 	{
 		out_tracking_color_id = cfg.tracking_color_id;
 		bSuccess = true;
@@ -1339,9 +1341,9 @@ PSMoveController::writeDataOut()
 
     return bSuccess;
 }
-
+#endif
 bool
-PSMoveController::setLED(unsigned char r, unsigned char g, unsigned char b)
+SingleBulbHMD::setLED(unsigned char r, unsigned char g, unsigned char b)
 {
     bool success = true;
     if ((LedR != r) || (LedG != g) || (LedB != b))
@@ -1349,12 +1351,12 @@ PSMoveController::setLED(unsigned char r, unsigned char g, unsigned char b)
         LedR = r;
         LedG = g;
         LedB = b;
-        bWriteStateDirty = true;
-        success = writeDataOut();
+        //bWriteStateDirty = true;
+        //success = writeDataOut();
     }
     return success;
 }
-
+#if 0
 bool
 PSMoveController::setRumbleIntensity(unsigned char value)
 {
