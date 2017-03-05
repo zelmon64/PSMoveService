@@ -12,7 +12,7 @@
 #include <chrono>
 
 struct SingleBulbHIDDetails {
-	/*
+	//*
 	int vendor_id;
 	int product_id;
     std::string Device_path;
@@ -21,7 +21,7 @@ struct SingleBulbHIDDetails {
     hid_device *Handle_addr; // only needed by Win > 8.1, otherwise ignored.
     std::string Bt_addr;      // The bluetooth address of the controller
     std::string Host_bt_addr; // The bluetooth address of the adapter registered with the controller
-	*/
+	//*/
 };
 
 //struct PSMoveDataInput;  // See .cpp for full declaration
@@ -234,16 +234,16 @@ public:
     bool open(); // Opens the first HID device for the controller
     
     // -- IDeviceInterface
-    //virtual bool matchesDeviceEnumerator(const DeviceEnumerator *enumerator) const override;
+    virtual bool matchesDeviceEnumerator(const DeviceEnumerator *enumerator) const override;
     virtual bool open(const DeviceEnumerator *enumerator) override;
     virtual bool getIsOpen() const override;
-    //virtual bool getIsReadyToPoll() const override;
-    //virtual IDeviceInterface::ePollResult poll() override;
+    virtual bool getIsReadyToPoll() const override;
+    virtual IDeviceInterface::ePollResult poll() override;
     virtual void close() override;
-    //virtual long getMaxPollFailureCount() const override;
+    virtual long getMaxPollFailureCount() const override;
     virtual CommonDeviceState::eDeviceType getDeviceType() const override;
     virtual const CommonDeviceState * getState(int lookBack = 0) const override;
-    /*
+    //*
     // -- IControllerInterface
     virtual bool setHostBluetoothAddress(const std::string &address) override;
 	virtual bool setTrackingColorID(const eCommonTrackingColorID tracking_color_id) override;
@@ -253,7 +253,7 @@ public:
     virtual std::string getAssignedHostBluetoothAddress() const override;
     virtual std::string getSerial() const override;
 	virtual float getIdentityForwardDegrees() const override;
-	*/
+	//*/
     virtual bool getIsBluetooth() const override;
     virtual void getTrackingShape(CommonDeviceTrackingShape &outTrackingShape) const override;
 	virtual bool getTrackingColorID(eCommonTrackingColorID &out_tracking_color_id) const override;
@@ -289,7 +289,7 @@ private:
     
     // Constant while a controller is open
 	SingleBulbHMDConfig cfg;
-    //PSMoveHIDDetails HIDDetails;
+	SingleBulbHIDDetails HIDDetails;
     bool IsBluetooth;                               // true if valid serial number on device opening
 	bool SupportsMagnetometer;                      // true if controller emits valid magnetometer data
 	

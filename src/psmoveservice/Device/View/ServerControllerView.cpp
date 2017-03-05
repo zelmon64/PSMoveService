@@ -150,21 +150,21 @@ bool ServerControllerView::allocate_device_interface(
 
             m_multicam_pose_estimation = new ControllerOpticalPoseEstimation();
             m_multicam_pose_estimation->clear();
-        } break;/*
+        } break;//*
 	case CommonDeviceState::SingleBulb:
-	{
-		//m_device = new SingleBulbHMD();
-		m_tracker_pose_estimations = new ControllerOpticalPoseEstimation[TrackerManager::k_max_devices];
-		m_pose_filter = nullptr; // no pose filter until the device is opened
-
-		for (int tracker_index = 0; tracker_index < TrackerManager::k_max_devices; ++tracker_index)
 		{
-			m_tracker_pose_estimations[tracker_index].clear();
-		}
+			m_device = new SingleBulbHMD();
+			m_tracker_pose_estimations = new ControllerOpticalPoseEstimation[TrackerManager::k_max_devices];
+			m_pose_filter = nullptr; // no pose filter until the device is opened
 
-		m_multicam_pose_estimation = new ControllerOpticalPoseEstimation();
-		m_multicam_pose_estimation->clear();
-	} break;//*/
+			for (int tracker_index = 0; tracker_index < TrackerManager::k_max_devices; ++tracker_index)
+			{
+				m_tracker_pose_estimations[tracker_index].clear();
+			}
+
+			m_multicam_pose_estimation = new ControllerOpticalPoseEstimation();
+			m_multicam_pose_estimation->clear();
+		} break;//*/
     default:
         break;
     }
@@ -249,6 +249,10 @@ bool ServerControllerView::open(const class DeviceEnumerator *enumerator)
                     bAllocateTrackingColor = true;
                 }
             } break;
+		case CommonDeviceState::SingleBulb:
+			{
+
+			} break;
         default:
             break;
         }
@@ -382,6 +386,10 @@ void ServerControllerView::resetPoseFilter()
 			init_filters_for_psdualshock4(
 				static_cast<PSDualShock4Controller *>(m_device),
 				&m_pose_filter_space, &m_pose_filter);
+		} break;
+	case CommonDeviceState::SingleBulb:
+		{
+
 		} break;
 	}
 }
@@ -731,6 +739,10 @@ ServerControllerView::getIsStreamable() const
 			{
 				bIsStreamableController= true;
 			} break;
+		case CommonDeviceState::SingleBulb:
+			{
+
+			} break;
 		}
 	}
 
@@ -956,6 +968,10 @@ void ServerControllerView::update_LED_color_internal()
         {
             this->castChecked<PSDualShock4Controller>()->setLED(r, g, b);
         } break;
+	case CommonDeviceState::SingleBulb:
+		{
+
+		} break;
     default:
         assert(false && "Unhanded controller type!");
     }
@@ -1024,6 +1040,10 @@ bool ServerControllerView::setControllerRumble(
 
                 result = true;
             } break;
+		case CommonDeviceState::SingleBulb:
+			{
+
+			} break;
 
         default:
             assert(false && "Unhanded controller type!");
@@ -1573,6 +1593,10 @@ pose_filter_factory(
 				kalmanFilter->init(constants);
 				filter= kalmanFilter;
 			} break;
+		case CommonDeviceState::SingleBulb:
+			{
+
+			} break;
 		default:
 			assert(0 && "unreachable");
 		}
@@ -1619,6 +1643,10 @@ pose_filter_factory(
 			case CommonDeviceState::PSDualShock4:
 				position_filter_enum= PositionFilterTypeComplimentaryOpticalIMU;
 				break;
+			case CommonDeviceState::SingleBulb:
+				{
+
+				} break;
 			default:
 				assert(0 && "unreachable");
 			}
@@ -1664,6 +1692,10 @@ pose_filter_factory(
 			case CommonDeviceState::PSDualShock4:
 				orientation_filter_enum= OrientationFilterTypeComplementaryOpticalARG;
 				break;
+			case CommonDeviceState::SingleBulb:
+				{
+
+				} break;
 			default:
 				assert(0 && "unreachable");
 			}

@@ -380,12 +380,12 @@ SingleBulbHMD::SingleBulbHMD()
     , bWriteStateDirty(false)
     //, NextPollSequenceNumber(0)
 	, SupportsMagnetometer(false)
-{/*
+{//*
 	HIDDetails.vendor_id = -1;
 	HIDDetails.product_id = -1;
     HIDDetails.Handle = nullptr;
     HIDDetails.Handle_addr = nullptr;
-    
+    /*
     InData = new PSMoveDataInput;
     InData->type = PSMove_Req_GetInput;
 	*/
@@ -610,10 +610,11 @@ void SingleBulbHMD::close()
         SERVER_LOG_INFO("PSMoveController::close") << "PSMoveController(" << HIDDetails.Device_path << ") already closed. Ignoring request.";
     }*/
 }
-#if 0
+
 bool 
-PSMoveController::setHostBluetoothAddress(const std::string &new_host_bt_addr)
+SingleBulbHMD::setHostBluetoothAddress(const std::string &new_host_bt_addr)
 {
+#if 0
     bool success= false;
     unsigned char bts[PSMOVE_BTADDR_SET_SIZE];
 
@@ -666,12 +667,12 @@ PSMoveController::setHostBluetoothAddress(const std::string &new_host_bt_addr)
     {
         SERVER_LOG_ERROR("PSMoveController::setBTAddress") << "Malformed address: " << new_host_bt_addr;
     }
-
-    return success;
+#endif
+    return true;
 }
 
 bool
-PSMoveController::setTrackingColorID(const eCommonTrackingColorID tracking_color_id)
+SingleBulbHMD::setTrackingColorID(const eCommonTrackingColorID tracking_color_id)
 {
 	bool bSuccess = false;
 
@@ -687,7 +688,7 @@ PSMoveController::setTrackingColorID(const eCommonTrackingColorID tracking_color
 
 // Getters
 bool 
-PSMoveController::matchesDeviceEnumerator(const DeviceEnumerator *enumerator) const
+SingleBulbHMD::matchesDeviceEnumerator(const DeviceEnumerator *enumerator) const
 {
     // Down-cast the enumerator so we can use the correct get_path.
     const ControllerDeviceEnumerator *pEnum = static_cast<const ControllerDeviceEnumerator *>(enumerator);
@@ -697,7 +698,8 @@ PSMoveController::matchesDeviceEnumerator(const DeviceEnumerator *enumerator) co
     if (pEnum->get_device_type() == CommonControllerState::PSMove)
     {
         const char *enumerator_path= pEnum->get_path();
-        const char *dev_path= HIDDetails.Device_path.c_str();
+        //const char *dev_path= HIDDetails.Device_path.c_str();
+        const char *dev_path= pEnum->get_path();
 
     #ifdef _WIN32
         matches= _stricmp(dev_path, enumerator_path) == 0;
@@ -708,49 +710,49 @@ PSMoveController::matchesDeviceEnumerator(const DeviceEnumerator *enumerator) co
 
     return matches;
 }
-#endif
+
 bool 
 SingleBulbHMD::getIsBluetooth() const
 { 
     return IsBluetooth; 
 }
-#if 0
+
 bool
-PSMoveController::getIsReadyToPoll() const
+SingleBulbHMD::getIsReadyToPoll() const
 {
     return (getIsOpen() && getIsBluetooth());
 }
-
+//#if 0
 std::string 
-PSMoveController::getUSBDevicePath() const
+SingleBulbHMD::getUSBDevicePath() const
 {
     return HIDDetails.Device_path;
 }
 
 int
-PSMoveController::getVendorID() const
+SingleBulbHMD::getVendorID() const
 {
 	return HIDDetails.vendor_id;
 }
 
 int
-PSMoveController::getProductID() const
+SingleBulbHMD::getProductID() const
 {
 	return HIDDetails.product_id;
 }
 
 std::string 
-PSMoveController::getSerial() const
+SingleBulbHMD::getSerial() const
 {
     return HIDDetails.Bt_addr;
 }
 
 std::string 
-PSMoveController::getAssignedHostBluetoothAddress() const
+SingleBulbHMD::getAssignedHostBluetoothAddress() const
 {
     return HIDDetails.Host_bt_addr;
 }
-#endif
+//#endif
 bool
 SingleBulbHMD::getIsOpen() const
 {
@@ -765,7 +767,7 @@ SingleBulbHMD::getDeviceType() const
 }
 #if 0
 bool
-PSMoveController::getBTAddress(std::string& host, std::string& controller)
+SingleBulbHMD::getBTAddress(std::string& host, std::string& controller)
 {
     bool success = false;
 
@@ -852,7 +854,7 @@ PSMoveController::getBTAddress(std::string& host, std::string& controller)
 }
 
 void
-PSMoveController::loadCalibration()
+SingleBulbHMD::loadCalibration()
 {
     bool is_valid= true;
 
@@ -1222,6 +1224,12 @@ PSMoveController::poll()
     return result;
 }
 #endif
+
+IControllerInterface::ePollResult
+SingleBulbHMD::poll()
+{
+	return IControllerInterface::_PollResultFailure;
+}
 const CommonDeviceState * 
 SingleBulbHMD::getState(
     int lookBack) const
@@ -1260,13 +1268,13 @@ SingleBulbHMD::getTrackingColorID(eCommonTrackingColorID &out_tracking_color_id)
 
 	return bSuccess;
 }
-/*
-float PSMoveController::getIdentityForwardDegrees() const
+//*
+float SingleBulbHMD::getIdentityForwardDegrees() const
 {
 	// Controller model points down the -Z axis when it has the identity orientation
 	return 270.f;
 }
-*/
+//*/
 float SingleBulbHMD::getPredictionTime() const
 {
 	return getConfig()->prediction_time;
@@ -1308,12 +1316,13 @@ PSMoveController::getTempCelsius() const
     
     return 70;
 }
-
-long PSMoveController::getMaxPollFailureCount() const
+#endif
+long SingleBulbHMD::getMaxPollFailureCount() const
 {
-    return cfg.max_poll_failure_count;
+    //return cfg.max_poll_failure_count;
+    return 1;
 }
-
+#if 0
 // Setters
 
 bool
