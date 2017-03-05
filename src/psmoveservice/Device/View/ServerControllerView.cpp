@@ -251,7 +251,18 @@ bool ServerControllerView::open(const class DeviceEnumerator *enumerator)
             } break;
 		case CommonDeviceState::SingleBulb:
 			{
+				const SingleBulbHMD *singlebulbHMD = this->castCheckedConst<SingleBulbHMD>();
 
+				// Don't bother initializing any filters or allocating a tracking color
+				// for usb connected controllers
+				if (singlebulbHMD->getIsBluetooth())
+				{
+					// Create a pose filter based on the controller type
+					resetPoseFilter();
+					m_multicam_pose_estimation->clear();
+
+					bAllocateTrackingColor = true;
+				}
 			} break;
         default:
             break;
@@ -389,7 +400,9 @@ void ServerControllerView::resetPoseFilter()
 		} break;
 	case CommonDeviceState::SingleBulb:
 		{
-
+			init_filters_for_psmove(
+				static_cast<PSMoveController *>(m_device),
+				&m_pose_filter_space, &m_pose_filter);
 		} break;
 	}
 }
@@ -740,9 +753,6 @@ ServerControllerView::getIsStreamable() const
 				bIsStreamableController= true;
 			} break;
 		case CommonDeviceState::SingleBulb:
-			{
-
-			} break;
 		}
 	}
 
@@ -970,7 +980,7 @@ void ServerControllerView::update_LED_color_internal()
         } break;
 	case CommonDeviceState::SingleBulb:
 		{
-
+			// Not changable
 		} break;
     default:
         assert(false && "Unhanded controller type!");
@@ -1042,7 +1052,7 @@ bool ServerControllerView::setControllerRumble(
             } break;
 		case CommonDeviceState::SingleBulb:
 			{
-
+				result = false; // No rumble on a light
 			} break;
 
         default:
@@ -1595,7 +1605,9 @@ pose_filter_factory(
 			} break;
 		case CommonDeviceState::SingleBulb:
 			{
-
+				KalmanPoseFilterPSMove *kalmanFilter = new KalmanPoseFilterPSMove();
+				kalmanFilter->init(constants);
+				filter = kalmanFilter;
 			} break;
 		default:
 			assert(0 && "unreachable");
@@ -1644,9 +1656,8 @@ pose_filter_factory(
 				position_filter_enum= PositionFilterTypeComplimentaryOpticalIMU;
 				break;
 			case CommonDeviceState::SingleBulb:
-				{
-
-				} break;
+				position_filter_enum = PositionFilterTypeLowPassExponential;
+				break;
 			default:
 				assert(0 && "unreachable");
 			}
@@ -1694,7 +1705,7 @@ pose_filter_factory(
 				break;
 			case CommonDeviceState::SingleBulb:
 				{
-
+					// no orientaion
 				} break;
 			default:
 				assert(0 && "unreachable");
