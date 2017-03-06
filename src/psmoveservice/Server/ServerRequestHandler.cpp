@@ -16,6 +16,7 @@
 #include "PSDualShock4Controller.h"
 #include "PSMoveController.h"
 #include "PSNaviController.h"
+#include "SingleBulbHMD.h"
 #include "PSMoveProtocol.pb.h"
 #include "ServerControllerView.h"
 #include "ServerDeviceView.h"
@@ -682,6 +683,21 @@ protected:
 						prediction_time = config->prediction_time;
 
 						controller_info->set_controller_type(PSMoveProtocol::PSDUALSHOCK4);
+					}
+                    break;
+                case CommonControllerState::SingleBulb:
+					{
+						const SingleBulbHMD *controller = controller_view->castCheckedConst<SingleBulbHMD>();
+						const SingleBulbHMDConfig *config = controller->getConfig();
+
+						//orientation_filter = config->orientation_filter_type;
+						position_filter = config->position_filter_type;
+						//firmware_version = config->firmware_version;
+						//firmware_revision = config->firmware_revision;
+						prediction_time = config->prediction_time;
+						has_magnetometer = controller->getSupportsMagnetometer();
+
+						controller_info->set_controller_type(PSMoveProtocol::SINGLEBULB);
 					}
                     break;
                 default:

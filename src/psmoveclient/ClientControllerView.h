@@ -767,6 +767,95 @@ protected:
 	void ProcessRecenterAction(class ClientControllerView *parentView);
 };
 
+struct PSM_CPP_PUBLIC_CLASS ClientSingleBulbView
+{
+private:
+	bool bValid;
+	//bool bHasValidHardwareCalibration;
+	bool bIsTrackingEnabled;
+	bool bIsCurrentlyTracking;
+	//bool bIsOrientationValid;
+	bool bIsPositionValid;
+	bool bHasUnpublishedState;
+
+	PSMovePose Pose;
+	//PSMovePhysicsData PhysicsData;
+	//PSMoveRawSensorData RawSensorData;
+	//PSMoveCalibratedSensorData CalibratedSensorData;
+	PSMoveRawTrackerData RawTrackerData;
+
+	unsigned char LED_r, LED_g, LED_b;
+
+	long long ResetPoseButtonPressTime;
+	bool bResetPoseRequestSent;
+	bool bPoseResetButtonEnabled;
+
+public:
+	void Clear();
+	void ApplyControllerDataFrame(class ClientControllerView *parentView, const PSMoveProtocol::DeviceOutputDataFrame_ControllerDataPacket *data_frame);
+	void Publish(PSMoveProtocol::DeviceInputDataFrame_ControllerDataPacket *data_frame);
+
+	//void SetRumble(float rumbleFraction);
+	//void SetLEDOverride(unsigned char red, unsigned char g, unsigned char b);
+
+	inline bool IsValid() const
+	{
+		return bValid;
+	}
+
+	inline void SetValid(bool flag)
+	{
+		bValid = flag;
+	}
+
+	inline bool GetIsCurrentlyTracking() const
+	{
+		return IsValid() ? bIsCurrentlyTracking : false;
+	}
+
+	inline bool GetIsTrackingEnabled() const
+	{
+		return IsValid() ? bIsTrackingEnabled : false;
+	}
+
+	inline bool GetIsPositionValid() const
+	{
+		return IsValid() ? bIsPositionValid : false;
+	}
+
+	inline bool GetHasUnpublishedState() const
+	{
+		return IsValid() ? bHasUnpublishedState : false;
+	}
+
+	inline const PSMovePose &GetPose() const
+	{
+		return IsValid() ? Pose : *k_psmove_pose_identity;
+	}
+
+	inline const PSMovePosition &GetPosition() const
+	{
+		return IsValid() ? Pose.Position : *k_psmove_position_origin;
+	}
+
+	//const PSMovePhysicsData &GetPhysicsData() const;
+	//const PSMoveCalibratedSensorData &GetCalibratedSensorData() const;
+	//bool GetIsStable() const;
+	//bool GetIsGyroStable() const;
+	//bool GetIsStableAndAlignedWithGravity() const;
+
+
+	const PSMoveRawTrackerData &GetRawTrackerData() const;
+
+	inline void SetPoseResetButtonEnabled(bool bEnabled)
+	{
+		bPoseResetButtonEnabled = bEnabled;
+	}
+
+protected:
+	void ProcessRecenterAction(class ClientControllerView *parentView);
+};
+
 class PSM_CPP_PUBLIC_CLASS ClientControllerView
 {
 public:
@@ -775,7 +864,8 @@ public:
         None= -1,
         PSMove,
         PSNavi,
-        PSDualShock4
+        PSDualShock4,
+		SingleBulb
     };
 
 private:
@@ -784,6 +874,7 @@ private:
         ClientPSMoveView PSMoveView;
         ClientPSNaviView PSNaviView;
         ClientPSDualShock4View PSDualShock4View;
+		ClientSingleBulbView SingleBulbView;
     } ViewState;
     eControllerType ControllerViewType;
 
@@ -873,6 +964,18 @@ public:
         assert(ControllerViewType == PSDualShock4);
         return ViewState.PSDualShock4View;
     }
+
+	inline const ClientSingleBulbView &GetSingleBulbView() const
+	{
+		assert(ControllerViewType == SingleBulb);
+		return ViewState.SingleBulbView;
+	}
+
+	inline ClientSingleBulbView &GetSingleBulbViewMutable()
+	{
+		assert(ControllerViewType == SingleBulb);
+		return ViewState.SingleBulbView;
+	}
 
     inline bool IsValid() const
     {

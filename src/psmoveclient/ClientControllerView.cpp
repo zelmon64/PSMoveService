@@ -788,6 +788,106 @@ const PSMoveRawTrackerData &ClientPSDualShock4View::GetRawTrackerData() const
     return RawTrackerData;
 }
 
+//-- ClientSingleBulbView -----
+void ClientSingleBulbView::Clear()
+{
+	bValid = false;
+	//bHasValidHardwareCalibration = false;
+	bIsTrackingEnabled = false;
+	bIsCurrentlyTracking = false;
+	//bHasUnpublishedState = false;
+
+	Pose.Clear();
+	//PhysicsData.Clear();
+	//RawSensorData.Clear();
+	RawTrackerData.Clear();
+
+}
+
+void ClientSingleBulbView::ApplyControllerDataFrame(
+	class ClientControllerView *parentView,
+	const PSMoveProtocol::DeviceOutputDataFrame_ControllerDataPacket *data_frame)
+{
+	if (data_frame->isconnected())
+	{
+		const auto &psmove_data_frame = data_frame->psmove_state();
+
+		//this->bHasValidHardwareCalibration = psmove_data_frame.validhardwarecalibration();
+		this->bIsTrackingEnabled = psmove_data_frame.istrackingenabled();
+		this->bIsCurrentlyTracking = psmove_data_frame.iscurrentlytracking();
+		//this->bIsOrientationValid = psmove_data_frame.isorientationvalid();
+		this->bIsPositionValid = psmove_data_frame.ispositionvalid();
+
+		this->Pose.Position.x = psmove_data_frame.position_cm().x();
+		this->Pose.Position.y = psmove_data_frame.position_cm().y();
+		this->Pose.Position.z = psmove_data_frame.position_cm().z();
+
+		if (psmove_data_frame.has_raw_tracker_data())
+		{
+			const auto &raw_tracker_data = psmove_data_frame.raw_tracker_data();
+
+			this->RawTrackerData.ValidTrackerLocations =
+				std::min(raw_tracker_data.valid_tracker_count(), PSMOVESERVICE_MAX_TRACKER_COUNT);
+
+			for (int listIndex = 0; listIndex < this->RawTrackerData.ValidTrackerLocations; ++listIndex)
+			{
+				const PSMoveProtocol::Pixel &locationOnTracker = raw_tracker_data.screen_locations(listIndex);
+				const PSMoveProtocol::Position &positionOnTracker = raw_tracker_data.relative_positions_cm(listIndex);
+
+				this->RawTrackerData.TrackerIDs[listIndex] = raw_tracker_data.tracker_ids(listIndex);
+				this->RawTrackerData.ScreenLocations[listIndex] =
+					PSMoveScreenLocation::create(locationOnTracker.x(), locationOnTracker.y());
+				this->RawTrackerData.RelativePositionsCm[listIndex] =
+					PSMovePosition::create(
+						positionOnTracker.x(), positionOnTracker.y(), positionOnTracker.z());
+				this->RawTrackerData.RelativeOrientations[listIndex] = PSMoveQuaternion::create(1.f, 0.f, 0.f, 0.f);
+
+				if (raw_tracker_data.projected_spheres_size() > 0)
+				{
+					const PSMoveProtocol::Ellipse &protocolEllipse = raw_tracker_data.projected_spheres(listIndex);
+					PSMoveTrackingProjection &projection = this->RawTrackerData.TrackingProjections[listIndex];
+
+					projection.shape.ellipse.center.x = protocolEllipse.center().x();
+					projection.shape.ellipse.center.y = protocolEllipse.center().y();
+					projection.shape.ellipse.half_x_extent = protocolEllipse.half_x_extent();
+					projection.shape.ellipse.half_y_extent = protocolEllipse.half_y_extent();
+					projection.shape.ellipse.angle = protocolEllipse.angle();
+					projection.shape_type = PSMoveTrackingProjection::eShapeType::Ellipse;
+				}
+				else
+				{
+					PSMoveTrackingProjection &projection = this->RawTrackerData.TrackingProjections[listIndex];
+
+					projection.shape_type = PSMoveTrackingProjection::eShapeType::INVALID_PROJECTION;
+				}
+			}
+
+			if (raw_tracker_data.has_multicam_position_cm())
+			{
+				const PSMoveProtocol::Position &multicam_position = raw_tracker_data.multicam_position_cm();
+
+				this->RawTrackerData.MulticamPositionCm.x = multicam_position.x();
+				this->RawTrackerData.MulticamPositionCm.y = multicam_position.y();
+				this->RawTrackerData.MulticamPositionCm.z = multicam_position.z();
+				this->RawTrackerData.bMulticamPositionValid = true;
+			}
+		}
+		else
+		{
+			this->RawTrackerData.Clear();
+		}
+		
+		this->bValid = true;
+
+		// Fire off a recenter action if the recenter button has been held for long enough
+		ProcessRecenterAction(parentView);
+	}
+	else
+	{
+		Clear();
+	}
+}
+
 //-- ClientControllerView -----
 ClientControllerView::ClientControllerView(int PSMoveID)
 {
