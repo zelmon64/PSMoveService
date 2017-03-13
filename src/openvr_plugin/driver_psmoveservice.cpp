@@ -1547,6 +1547,12 @@ CPSMoveControllerLatest::CPSMoveControllerLatest(
 			m_fMetersPerTouchpadAxisUnits= 
 				LoadFloat(pSettings, "psmove", "meters_per_touchpad_units", .075f);
 			
+			// Throwing power settings
+			m_fLinearAccelerationPower =
+				LoadFloat(pSettings, "psmove_settings", "linear_acceleration_power", 1.f);
+			m_fLinearVelocityPower =
+				LoadFloat(pSettings, "psmove_settings", "linear_velocity_power", 1.f);
+
 			// Chack for PSNavi up/down mappings
 			char remapButtonToButtonString[32];
 			vr::EVRSettingsError fetchError;
@@ -2871,13 +2877,13 @@ void CPSMoveControllerLatest::UpdateTrackingState()
             {
                 const PSMovePhysicsData &physicsData= view.GetPhysicsData();
 
-                m_Pose.vecVelocity[0] = physicsData.VelocityCmPerSec.i * k_fScalePSMoveAPIToMeters;
-                m_Pose.vecVelocity[1] = physicsData.VelocityCmPerSec.j * k_fScalePSMoveAPIToMeters;
-                m_Pose.vecVelocity[2] = physicsData.VelocityCmPerSec.k * k_fScalePSMoveAPIToMeters;
+                m_Pose.vecVelocity[0] = physicsData.VelocityCmPerSec.i * k_fScalePSMoveAPIToMeters * m_fLinearVelocityPower;
+                m_Pose.vecVelocity[1] = physicsData.VelocityCmPerSec.j * k_fScalePSMoveAPIToMeters * m_fLinearVelocityPower;
+                m_Pose.vecVelocity[2] = physicsData.VelocityCmPerSec.k * k_fScalePSMoveAPIToMeters * m_fLinearVelocityPower;
 
-                m_Pose.vecAcceleration[0] = physicsData.AccelerationCmPerSecSqr.i * k_fScalePSMoveAPIToMeters;
-                m_Pose.vecAcceleration[1] = physicsData.AccelerationCmPerSecSqr.j * k_fScalePSMoveAPIToMeters;
-                m_Pose.vecAcceleration[2] = physicsData.AccelerationCmPerSecSqr.k * k_fScalePSMoveAPIToMeters;
+                m_Pose.vecAcceleration[0] = physicsData.AccelerationCmPerSecSqr.i * k_fScalePSMoveAPIToMeters * m_fLinearAccelerationPower;
+                m_Pose.vecAcceleration[1] = physicsData.AccelerationCmPerSecSqr.j * k_fScalePSMoveAPIToMeters * m_fLinearAccelerationPower;
+                m_Pose.vecAcceleration[2] = physicsData.AccelerationCmPerSecSqr.k * k_fScalePSMoveAPIToMeters * m_fLinearAccelerationPower;
 
                 m_Pose.vecAngularVelocity[0] = physicsData.AngularVelocityRadPerSec.i;
                 m_Pose.vecAngularVelocity[1] = physicsData.AngularVelocityRadPerSec.j;

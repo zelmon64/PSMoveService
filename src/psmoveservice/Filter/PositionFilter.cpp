@@ -422,7 +422,6 @@ void PositionFilterLowPassExponential::update(const float delta_time, const Pose
 
 		int queueLen = 20;
 		float smooth = 0.8f;
-		float smoothv = 0.4f;
 
 		if (m_state->bIsValid)
 		{
