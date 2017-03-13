@@ -56,7 +56,9 @@ public:
 	void update(const float delta_time, const PoseFilterPacket &packet) override;
 	std::list<float> timeList;
 	std::list<Eigen::Vector3f> positionList;
+	std::list<Eigen::Vector3f> velocityList;
 	Eigen::Vector3f prevVelocity;
+	Eigen::Vector3f prevAcceleration;
 };
 
 class PositionFilterComplimentaryOpticalIMU : public PositionFilter

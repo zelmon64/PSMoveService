@@ -452,7 +452,24 @@ void PositionFilterLowPassExponential::update(const float delta_time, const Pose
 				m_state->velocity_m_per_sec = Eigen::Vector3f::Zero();
 			}
 
-			m_state->acceleration_m_per_sec_sqr = Eigen::Vector3f::Zero(); //new_acceleration;
+			Eigen::Vector3f oldVelocity = *(velocityList.begin());
+			Eigen::Vector3f expVelocity = (m_state->velocity_m_per_sec * smooth) + (oldVelocity * (1.0f - smooth));
+			velocityList.push_back(expVelocity);
+			if (velocityList.size() > queueLen)
+				velocityList.pop_front();
+
+			if (totalTime > 0.f)
+			{
+
+				Eigen::Vector3f newvAcceleration = (velocityList.back() - velocityList.front()) / totalTime;
+				prevAcceleration = (newvAcceleration * smooth) + (prevAcceleration * (1.0f - smooth));
+				m_state->acceleration_m_per_sec_sqr = prevAcceleration;
+			}
+			else {
+				m_state->acceleration_m_per_sec_sqr = Eigen::Vector3f::Zero();
+			}
+
+			//m_state->acceleration_m_per_sec_sqr = Eigen::Vector3f::Zero(); //new_acceleration;
 		}
 		else
 		{
