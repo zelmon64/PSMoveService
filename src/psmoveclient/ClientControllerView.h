@@ -24,6 +24,18 @@ enum PSMoveButtonState {
     PSMoveButton_RELEASED = 0x02, // (10b) Up for one frame only
 };
 
+enum PSMoveBatteryState
+{
+    PSMoveBattery_0        = 0,
+    PSMoveBattery_20       = 1,
+    PSMoveBattery_40       = 2,
+    PSMoveBattery_60       = 3,
+    PSMoveBattery_80       = 4,
+    PSMoveBattery_100      = 5,
+    PSMoveBattery_Charging = 0xEE,
+    PSMoveBattery_Charged  = 0xEF
+};
+
 enum PSMoveTrackingColorType {
     Magenta,    // R:0xFF, G:0x00, B:0xFF
     Cyan,       // R:0x00, G:0xFF, B:0xFF
@@ -209,6 +221,7 @@ private:
     PSMoveButtonState TriggerButton;
 
     unsigned char TriggerValue;
+	PSMoveBatteryState BatteryValue;
 
     unsigned char Rumble;
     unsigned char LED_r, LED_g, LED_b;
@@ -325,9 +338,14 @@ public:
         return IsValid() ? TriggerButton : PSMoveButton_UP;
     }
 
-    inline float GetTriggerValue() const
+	inline PSMoveBatteryState GetBatteryValue() const 
+	{
+		return IsValid() ? BatteryValue : PSMoveBattery_0;
+	}
+
+    inline unsigned char GetTriggerValue() const
     {
-        return IsValid() ? ((float)TriggerValue / 255.f) : 0.f;
+        return IsValid() ? TriggerValue : 0;
     }
 
     inline float GetRumble() const
@@ -445,9 +463,9 @@ public:
         return IsValid() ? DPadLeftButton : PSMoveButton_UP;
     }
 
-    inline float GetTriggerValue() const
+    inline unsigned char GetTriggerValue() const
     {
-        return IsValid() ? ((float)TriggerValue / 255.f) : 0.f;
+        return IsValid() ? TriggerValue : 0;
     }
 
     inline float GetStickXAxis() const
