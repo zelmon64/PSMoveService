@@ -323,6 +323,12 @@ private:
 	bool m_bUseSpatialOffsetAfterTouchpadPressAsTouchpadAxis;
 	float m_fMetersPerTouchpadAxisUnits;
 
+	// Settings values. Used to adjust throwing power using linear velocity and acceleration.
+	float m_fLinearAccelerationMultiplier;
+	float m_fLinearVelocityMultiplier;
+	float m_fLinearAccelerationExponent;
+	float m_fLinearVelocityExponent;
+
 	// Settings value: used to determine how many meters in front of the HMD the controller
 	// is held when it's being calibrated.
 	float m_fControllerMetersInFrontOfHmdAtCalibration;

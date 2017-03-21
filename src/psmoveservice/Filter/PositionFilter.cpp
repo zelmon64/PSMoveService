@@ -412,7 +412,7 @@ void PositionFilterComplimentaryOpticalIMU::update(const float delta_time, const
     }
 }
 
-// -- PositionFilterComplimentaryOpticalIMU --
+// -- PositionFilterLowPassExponential --
 void PositionFilterLowPassExponential::update(const float delta_time, const PoseFilterPacket &packet)
 {
 	if (packet.tracking_projection_area_px_sqr > 0.f && eigen_vector3f_is_valid(packet.optical_position_cm))
@@ -422,7 +422,6 @@ void PositionFilterLowPassExponential::update(const float delta_time, const Pose
 
 		int queueLen = 20;
 		float smooth = 0.8f;
-		float smoothv = 0.4f;
 
 		if (m_state->bIsValid)
 		{
@@ -446,14 +445,18 @@ void PositionFilterLowPassExponential::update(const float delta_time, const Pose
 			{
 
 				Eigen::Vector3f newvVelocity = (positionList.back() - positionList.front()) / totalTime;
-				prevVelocity = (newvVelocity * smooth) + (prevVelocity * (1.0f - smooth));
+				Eigen::Vector3f currVelocity = (newvVelocity * smooth) + (prevVelocity * (1.0f - smooth));
+				Eigen::Vector3f currAcceleration = (currVelocity - prevVelocity) / delta_time;
+				prevVelocity = currVelocity;
 				m_state->velocity_m_per_sec = prevVelocity;
+				m_state->acceleration_m_per_sec_sqr = currAcceleration;
 			}
 			else {
 				m_state->velocity_m_per_sec = Eigen::Vector3f::Zero();
+				m_state->acceleration_m_per_sec_sqr = Eigen::Vector3f::Zero();
 			}
 
-			m_state->acceleration_m_per_sec_sqr = Eigen::Vector3f::Zero(); //new_acceleration;
+			//m_state->acceleration_m_per_sec_sqr = Eigen::Vector3f::Zero(); //new_acceleration;
 		}
 		else
 		{

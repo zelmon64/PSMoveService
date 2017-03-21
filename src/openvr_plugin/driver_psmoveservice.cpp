@@ -1492,6 +1492,16 @@ CPSMoveControllerLatest::CPSMoveControllerLatest(
 			m_fMetersPerTouchpadAxisUnits= 
 				LoadFloat(pSettings, "psmove", "meters_per_touchpad_units", .075f);
 
+			// Throwing power settings
+			m_fLinearAccelerationMultiplier =
+				LoadFloat(pSettings, "psmove_settings", "linear_acceleration_multiplier", 1.f);
+			m_fLinearVelocityMultiplier =
+				LoadFloat(pSettings, "psmove_settings", "linear_velocity_multiplier", 1.f);
+			m_fLinearAccelerationExponent =
+				LoadFloat(pSettings, "psmove_settings", "linear_acceleration_exponent", 0.f);
+			m_fLinearVelocityExponent =
+				LoadFloat(pSettings, "psmove_settings", "linear_velocity_exponent", 0.f);
+
 			// Chack for PSNavi up/down mappings
 			char remapButtonToButtonString[32];
 			vr::EVRSettingsError fetchError;
@@ -2885,13 +2895,25 @@ void CPSMoveControllerLatest::UpdateTrackingState()
             {
                 const PSMPhysicsData &physicsData= view.PhysicsData;
 
-                m_Pose.vecVelocity[0] = physicsData.LinearVelocityCmPerSec.x * k_fScalePSMoveAPIToMeters;
-                m_Pose.vecVelocity[1] = physicsData.LinearVelocityCmPerSec.y * k_fScalePSMoveAPIToMeters;
-                m_Pose.vecVelocity[2] = physicsData.LinearVelocityCmPerSec.z * k_fScalePSMoveAPIToMeters;
+                m_Pose.vecVelocity[0] = physicsData.LinearVelocityCmPerSec.x 
+					* abs(pow(abs(physicsData.LinearVelocityCmPerSec.x), m_fLinearVelocityExponent))
+					* k_fScalePSMoveAPIToMeters * m_fLinearVelocityMultiplier;
+                m_Pose.vecVelocity[1] = physicsData.LinearVelocityCmPerSec.y
+					* abs(pow(abs(physicsData.LinearVelocityCmPerSec.y), m_fLinearVelocityExponent))
+					* k_fScalePSMoveAPIToMeters * m_fLinearVelocityMultiplier;
+                m_Pose.vecVelocity[2] = physicsData.LinearVelocityCmPerSec.z
+					* abs(pow(abs(physicsData.LinearVelocityCmPerSec.z), m_fLinearVelocityExponent))
+					* k_fScalePSMoveAPIToMeters * m_fLinearVelocityMultiplier;
 
-                m_Pose.vecAcceleration[0] = physicsData.LinearAccelerationCmPerSecSqr.x * k_fScalePSMoveAPIToMeters;
-                m_Pose.vecAcceleration[1] = physicsData.LinearAccelerationCmPerSecSqr.y * k_fScalePSMoveAPIToMeters;
-                m_Pose.vecAcceleration[2] = physicsData.LinearAccelerationCmPerSecSqr.z * k_fScalePSMoveAPIToMeters;
+                m_Pose.vecAcceleration[0] = physicsData.LinearAccelerationCmPerSecSqr.x 
+					* abs(pow(abs(physicsData.LinearAccelerationCmPerSecSqr.x), m_fLinearAccelerationExponent))
+					* k_fScalePSMoveAPIToMeters * m_fLinearAccelerationMultiplier;
+                m_Pose.vecAcceleration[1] = physicsData.LinearAccelerationCmPerSecSqr.y
+					* abs(pow(abs(physicsData.LinearAccelerationCmPerSecSqr.y), m_fLinearAccelerationExponent))
+					* k_fScalePSMoveAPIToMeters * m_fLinearAccelerationMultiplier;
+                m_Pose.vecAcceleration[2] = physicsData.LinearAccelerationCmPerSecSqr.z
+					* abs(pow(abs(physicsData.LinearAccelerationCmPerSecSqr.z), m_fLinearAccelerationExponent))
+					* k_fScalePSMoveAPIToMeters * m_fLinearAccelerationMultiplier;
 
                 m_Pose.vecAngularVelocity[0] = physicsData.AngularVelocityRadPerSec.x;
                 m_Pose.vecAngularVelocity[1] = physicsData.AngularVelocityRadPerSec.y;
