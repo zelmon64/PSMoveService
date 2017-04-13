@@ -1474,6 +1474,7 @@ CPSMoveControllerLatest::CPSMoveControllerLatest(
 	, m_fControllerMetersInFrontOfHmdAtCalibration(0.f)
 	, m_bUseControllerOrientationInHMDAlignment(false)
 	, m_triggerAxisIndex(1)
+	, m_navitriggerAxisIndex(1)
 	, m_thumbstickDeadzone(k_defaultThumbstickDeadZoneRadius)
 	, m_bThumbstickTouchAsPress(true)
 {
@@ -1534,6 +1535,7 @@ CPSMoveControllerLatest::CPSMoveControllerLatest(
 
 			// Trigger mapping
 			m_triggerAxisIndex = LoadInt(pSettings, "psmove", "trigger_axis_index", 1);
+			m_navitriggerAxisIndex = LoadInt(pSettings, "psnavi_buttons", "trigger_axis_index", m_triggerAxisIndex);
 
 			// Touch pad settings
 			m_bDelayAfterTouchpadPress = 
@@ -2311,7 +2313,9 @@ void CPSMoveControllerLatest::UpdateControllerState()
 				{
 					const ClientPSNaviView &naviClientView = m_PSMChildControllerView->GetPSNaviView();
 
-					NewState.rAxis[m_triggerAxisIndex].x = fmaxf(NewState.rAxis[m_triggerAxisIndex].x, naviClientView.GetTriggerValue());
+					NewState.rAxis[m_navitriggerAxisIndex].x = fmaxf(NewState.rAxis[m_navitriggerAxisIndex].x, naviClientView.GetTriggerValue());
+					if (m_navitriggerAxisIndex != m_triggerAxisIndex)
+						NewState.rAxis[m_navitriggerAxisIndex].y = 0.f;
 				}
 
 				// Trigger SteamVR Events
@@ -2328,6 +2332,20 @@ void CPSMoveControllerLatest::UpdateControllerState()
 					}
 
 					m_pDriverHost->TrackedDeviceAxisUpdated(m_unSteamVRTrackedDeviceId, m_triggerAxisIndex, NewState.rAxis[m_triggerAxisIndex]);
+				}
+				if (m_navitriggerAxisIndex != m_triggerAxisIndex && (NewState.rAxis[m_navitriggerAxisIndex].x != m_ControllerState.rAxis[m_navitriggerAxisIndex].x))
+				{
+					if (NewState.rAxis[m_navitriggerAxisIndex].x > 0.1f)
+					{
+						NewState.ulButtonTouched |= vr::ButtonMaskFromId(static_cast<vr::EVRButtonId>(vr::k_EButton_Axis0 + m_navitriggerAxisIndex));
+					}
+
+					if (NewState.rAxis[m_navitriggerAxisIndex].x > 0.8f)
+					{
+						NewState.ulButtonPressed |= vr::ButtonMaskFromId(static_cast<vr::EVRButtonId>(vr::k_EButton_Axis0 + m_navitriggerAxisIndex));
+					}
+
+					m_pDriverHost->TrackedDeviceAxisUpdated(m_unSteamVRTrackedDeviceId, m_navitriggerAxisIndex, NewState.rAxis[m_navitriggerAxisIndex]);
 				}
 			}
         } break;
