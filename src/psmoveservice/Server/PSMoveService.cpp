@@ -20,6 +20,7 @@
 #include <chrono>
 #include <thread>
 #include <signal.h>
+#include "../SDL2/include/SDL_events.h"
 
 // provide setup example for windows service   
 #if defined(BOOST_WINDOWS_API)      
@@ -67,9 +68,20 @@ public:
                 m_status = context.find<boost::application::status>();
 
 				const TrackerManagerConfig &cfg = DeviceManager::getInstance()->m_tracker_manager->getConfig();
-
+				SDL_Event e;
                 while (m_status->state() != boost::application::status::stoped)
                 {
+					if (SDL_PollEvent(&e))
+					{
+						if (e.type == SDL_QUIT ||
+							(e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE))
+						{
+							// Log_INFO("App::exec", "QUIT message received");
+							// break;
+							SERVER_LOG_WARNING("PSMoveService") << "Received stop request. Stopping Service.";
+							m_status->state(boost::application::status::stoped);
+						}
+					}
                     if (m_status->state() != boost::application::status::paused)
                     {
                         update();
