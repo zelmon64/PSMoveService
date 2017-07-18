@@ -5,7 +5,7 @@
 #include <memory>
 
 //-- constants -----
-#define MAX_OUTPUT_DATA_FRAME_MESSAGE_SIZE 500
+#define MAX_OUTPUT_DATA_FRAME_MESSAGE_SIZE 50000
 #define MAX_INPUT_DATA_FRAME_MESSAGE_SIZE 64
  
 //-- pre-declarations -----
